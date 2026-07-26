@@ -62,6 +62,11 @@ export function parseAutoConfig(combo: ComboLike, eligibleTargets: ResolvedCombo
   );
   const resetWindowConfig = resolveResetWindowConfig(autoConfigSource);
   const slaPolicy = resolveSlaRoutingPolicy(autoConfigSource);
+  const routingPolicy =
+    autoConfigSource.routingPolicy === "free-first-paid-fallback" ||
+    autoConfigSource.routingPolicy === "codex-paid-free"
+      ? autoConfigSource.routingPolicy
+      : undefined;
 
   return {
     routingStrategy,
@@ -71,6 +76,7 @@ export function parseAutoConfig(combo: ComboLike, eligibleTargets: ResolvedCombo
     budgetCap,
     budgetFallback,
     modePack,
+    routingPolicy,
     resetWindowConfig,
     slaPolicy,
   };

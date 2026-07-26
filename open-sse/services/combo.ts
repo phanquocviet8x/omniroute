@@ -1196,6 +1196,7 @@ export async function handleComboChat({
   // pins orderedTargets[0]. The task-aware reordering below must then refine only
   // the fallback order, never override the router's primary choice.
   let autoUsedExplicitRouter = false;
+  let autoPinnedTarget: ResolvedComboTarget | undefined;
   if (strategy === "auto") {
     const autoResult = await resolveAutoStrategyOrder({
       orderedTargets,
@@ -1211,6 +1212,7 @@ export async function handleComboChat({
     if ("earlyResponse" in autoResult) return autoResult.earlyResponse;
     orderedTargets = autoResult.orderedTargets;
     autoUsedExplicitRouter = autoResult.autoUsedExplicitRouter;
+    autoPinnedTarget = autoUsedExplicitRouter ? orderedTargets[0] : undefined;
   } else {
     orderedTargets = await applyStrategyOrdering(strategy, orderedTargets, {
       combo,
@@ -1275,6 +1277,28 @@ export async function handleComboChat({
     }
   }
   orderedTargets = applyContextRequirements(orderedTargets, config.contextRequirements, log);
+
+  // Re-pin only when the strict-policy target survived all request-eligibility
+  // filters. Never reintroduce an incompatible or context-ineligible target.
+  if (autoPinnedTarget) {
+    const pinnedTarget = autoPinnedTarget;
+    const survivingPinned = orderedTargets.find(
+      (target) =>
+        target === pinnedTarget ||
+        target.executionKey === pinnedTarget.executionKey ||
+        target.executionKey.startsWith(`${pinnedTarget.executionKey}@`)
+    );
+    if (survivingPinned) {
+      orderedTargets = [
+        survivingPinned,
+        ...orderedTargets.filter((target) => target !== survivingPinned),
+      ];
+      autoPinnedTarget = survivingPinned;
+    } else {
+      autoPinnedTarget = undefined;
+      autoUsedExplicitRouter = false;
+    }
+  }
 
   // Task-aware reordering: only active for strategies ["smart","task","task-aware","task_aware","auto"].
   // Additive — does not affect any of the other 15 strategies.

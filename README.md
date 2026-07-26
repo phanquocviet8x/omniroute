@@ -7,6 +7,8 @@
 
 # 🚀 OmniRoute — The Free AI Gateway
 
+> **SulaShop fork:** based on upstream **v3.8.49**, preserving all upstream routes and adding `auto/bestfree` (free → paid fallback) plus `auto/bestcodex` (Codex → paid → free).
+
 <img src="./docs/diagrams/readme-hero.svg" width="100%" alt="OmniRoute — Never stop coding. Every AI tool → 290 providers — 90+ free — through one endpoint. Claude Code, Codex, Cursor, Cline, Copilot & Antigravity into FREE Claude / GPT / Gemini with auto-fallback. RTK + Caveman stacked compression saves 15–95% tokens (~89% avg) — never hit limits. 290 AI providers · 90+ free tiers · ~1.53B free tokens/mo · 19 routing strategies · $0 to start."/>
 
 </div>

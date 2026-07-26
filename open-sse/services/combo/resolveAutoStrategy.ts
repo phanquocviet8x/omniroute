@@ -1,4 +1,8 @@
-import { errorResponse, unavailableResponse, errorResponseWithComboDiagnostics } from "../../utils/error.ts";
+import {
+  errorResponse,
+  unavailableResponse,
+  errorResponseWithComboDiagnostics,
+} from "../../utils/error.ts";
 import { BudgetExceededError, selectProvider as selectAutoProvider } from "../autoCombo/engine.ts";
 import {
   resolveRequestModePack,
@@ -8,11 +12,13 @@ import {
 import { selectWithStrategy } from "../autoCombo/routerStrategy.ts";
 import { buildComplexityRoutingHint } from "../autoCombo/complexityRouter";
 import { getModePack } from "../autoCombo/modePacks.ts";
+import { getCodexModelPriority } from "../autoCombo/codexPriority.ts";
 import { recordComboIntent } from "../comboMetrics.ts";
 import { estimateTokens } from "../contextManager.ts";
 import { classifyWithConfig } from "../intentClassifier.ts";
 import type { RoutingHint } from "../manifestAdapter";
 import { parseModel } from "../model.ts";
+import { classifyTier } from "../tierResolver.ts";
 import { supportsToolCalling } from "../modelCapabilities.ts";
 import type { ResilienceSettings } from "../../../src/lib/resilience/settings";
 import { parseAutoConfig } from "./autoConfig.ts";
@@ -118,8 +124,7 @@ export async function resolveAutoStrategyOrder(
     // registry/capability rows honestly report toolCalling:false.
     const filtered = eligibleTargets.filter(
       (target) =>
-        supportsToolCalling(target.modelStr) ||
-        providerSupportsEmulatedToolCalling(target.provider)
+        supportsToolCalling(target.modelStr) || providerSupportsEmulatedToolCalling(target.provider)
     );
     if (filtered.length > 0) {
       eligibleTargets = filtered;
@@ -222,6 +227,7 @@ export async function resolveAutoStrategyOrder(
     budgetCap: configBudgetCap,
     budgetFallback: configBudgetFallback,
     modePack: configModePack,
+    routingPolicy,
     resetWindowConfig,
     slaPolicy,
   } = parseAutoConfig(combo, eligibleTargets);
@@ -317,7 +323,7 @@ export async function resolveAutoStrategyOrder(
     let selectedConnectionId: string | null = null;
     let selectionReason = "";
 
-    if (routingStrategy !== "rules") {
+    if (routingStrategy !== "rules" && !routingPolicy) {
       try {
         const decision = selectWithStrategy(
           routableCandidates,
@@ -388,15 +394,53 @@ export async function resolveAutoStrategyOrder(
           )
         : null;
 
-    const scoredTargets = scoreAutoTargets(
-      eligibleTargets,
-      routableCandidates,
-      taskType,
-      weights,
-      autoManifestHint
+    const isFree = (candidate: AutoProviderCandidate): boolean => {
+      try {
+        return classifyTier(candidate.provider, candidate.model).tier === "free";
+      } catch {
+        return false;
+      }
+    };
+    const policyStages: AutoProviderCandidate[][] = [];
+    if (routingPolicy === "free-first-paid-fallback") {
+      const free = routableCandidates.filter(isFree);
+      const paid = routableCandidates.filter((candidate) => !isFree(candidate));
+      if (free.length) policyStages.push(free);
+      if (paid.length) policyStages.push(paid);
+    } else if (routingPolicy === "codex-paid-free") {
+      const codex = routableCandidates.filter((candidate) => candidate.provider === "codex");
+      const paid = routableCandidates.filter(
+        (candidate) => candidate.provider !== "codex" && !isFree(candidate)
+      );
+      const free = routableCandidates.filter(
+        (candidate) => candidate.provider !== "codex" && isFree(candidate)
+      );
+      const codexByModel = new Map<number, AutoProviderCandidate[]>();
+      for (const candidate of codex) {
+        const rank = getCodexModelPriority(candidate.model);
+        codexByModel.set(rank, [...(codexByModel.get(rank) || []), candidate]);
+      }
+      for (const rank of [...codexByModel.keys()].sort((a, b) => a - b)) {
+        const stage = codexByModel.get(rank);
+        if (stage?.length) policyStages.push(stage);
+      }
+      if (paid.length) policyStages.push(paid);
+      if (free.length) policyStages.push(free);
+    } else {
+      policyStages.push(routableCandidates);
+    }
+    if (routingPolicy) {
+      log.info(
+        "COMBO",
+        `Auto policy ${routingPolicy}: ${routableCandidates.length} routable candidates`
+      );
+    }
+    const scoredTargets = policyStages.flatMap((stage) =>
+      scoreAutoTargets(eligibleTargets, stage, taskType, weights, autoManifestHint)
     );
     const rankedTargets = scoredTargets.map((entry) => entry.target);
     const selectedTarget =
+      (routingPolicy ? rankedTargets[0] : undefined) ||
       scoredTargets.find((entry) => {
         const parsed = parseModel(entry.target.modelStr);
         const modelId = parsed.model || entry.target.modelStr;
@@ -426,6 +470,9 @@ export async function resolveAutoStrategyOrder(
         (entry): entry is ResolvedComboTarget => entry !== undefined && entry !== null
       )
     );
+    // Strict staged custom policies pin their first-stage target against downstream
+    // stickiness/task-aware reordering while preserving the remaining fallback tail.
+    if (routingPolicy) autoUsedExplicitRouter = true;
 
     log.info(
       "COMBO",

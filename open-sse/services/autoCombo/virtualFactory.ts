@@ -20,6 +20,8 @@ import type { AutoVariant } from "./autoPrefix";
 import { buildFamilyCandidateFilter, type ModelFamily } from "./modelFamily";
 import { getHiddenModelsByProvider } from "@/models";
 import { filterPaidOnlyCandidates } from "./paidModelFilter";
+
+export type AutoRoutingPolicy = "free-first-paid-fallback" | "codex-paid-free";
 import { isModelExcludedByConnection } from "@/domain/connectionModelRules";
 import { filterExcludedCandidates } from "./candidateOverrides";
 import { getExcludedConnectionIds } from "@/lib/db/autoCandidateOverrides";
@@ -31,6 +33,7 @@ export interface AutoComboSpec {
   category?: AutoCategory;
   tier?: AutoTier;
   family?: ModelFamily;
+  policy?: AutoRoutingPolicy;
 }
 
 /** Minimal connection shape needed for virtual auto-combo factory */
@@ -482,7 +485,7 @@ export async function createVirtualAutoCombo(
   // both are somehow present, which callers never do in practice).
   const candidateFilter = spec?.family
     ? buildFamilyCandidateFilter(spec.family)
-    : spec
+    : spec?.category || spec?.tier
       ? buildAutoCandidateFilter(spec.category, spec.tier)
       : null;
   if (candidateFilter) {
@@ -588,6 +591,7 @@ export async function createVirtualAutoCombo(
     weights,
     explorationRate,
     routerStrategy,
+    ...(spec?.policy ? { routingPolicy: spec.policy } : {}),
   };
 
   // Chaos mode fans out to the top-N most stable models in parallel. Panel size

@@ -42,6 +42,8 @@ export interface AutoComboConfig {
   explorationRate: number; // 0.05 = 5% exploratory
   /** If set, RouterStrategy name to use for selection ('rules' | 'cost' | 'latency') */
   routerStrategy?: string;
+  /** SulaShop strict staged policy for the two custom auto channels. */
+  routingPolicy?: "free-first-paid-fallback" | "codex-paid-free";
 }
 
 /**

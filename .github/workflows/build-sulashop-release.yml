@@ -1,0 +1,82 @@
+name: Build SulaShop OmniRoute Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "open-sse/services/autoCombo/**"
+      - "open-sse/services/combo/**"
+      - "open-sse/services/combo.ts"
+      - "src/sse/handlers/autoRouting.ts"
+      - "tests/unit/services/sulashop-auto-policy-contract.test.mjs"
+      - ".github/workflows/build-sulashop-release.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sulashop-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DISABLE_SQLITE_AUTO_BACKUP: "true"
+      OMNIROUTE_BUILD_MEMORY_MB: "6144"
+      OMNIROUTE_USE_TURBOPACK: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck custom routing
+        run: npm run typecheck:core
+
+      - name: Test custom routing contract
+        run: node --import tsx/esm --test tests/unit/services/sulashop-auto-policy-contract.test.mjs
+
+      - name: Build coherent frontend and backend bundle
+        run: npm run build:release
+
+      - name: Build CLI sidecars
+        run: npm run build:cli
+
+      - name: Verify artifact
+        run: |
+          test -f dist/server.js
+          test -f dist/.build/next/BUILD_ID
+          test -d dist/.build/next/static
+          test -f dist/.build/next/server/app/login/page.js
+          test -f dist/.build/next/server/app/page.js
+          test -f dist/open-sse/mcp-server/server.js
+          grep -R -q 'auto/bestfree' dist
+          grep -R -q 'auto/bestcodex' dist
+          node --check dist/server.js
+          node --check dist/open-sse/mcp-server/server.js
+          printf '%s\n' "${GITHUB_SHA}" > dist/SULASHOP_BUILD_SHA
+          sha256sum dist/server.js dist/open-sse/mcp-server/server.js > dist/SHA256-sulashop.txt
+
+      - name: Package complete artifact
+        run: tar -C dist -czf omniroute-v3.8.49-sulashop.tar.gz .
+
+      - name: Upload complete artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniroute-v3.8.49-sulashop-${{ github.sha }}
+          path: omniroute-v3.8.49-sulashop.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

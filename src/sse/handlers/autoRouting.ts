@@ -1,6 +1,7 @@
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import type { AutoVariant } from "@omniroute/open-sse/services/autoCombo/autoPrefix.ts";
+import type { AutoRoutingPolicy } from "@omniroute/open-sse/services/autoCombo/virtualFactory.ts";
 import {
   AUTO_TEMPLATE_VARIANTS,
   VALID_AUTO_VARIANTS,
@@ -16,7 +17,7 @@ import * as log from "../utils/logger";
 export type AutoRoutingState = {
   model: string;
   variant?: AutoVariant;
-  spec?: { category?: AutoCategory; tier?: AutoTier };
+  spec?: { category?: AutoCategory; tier?: AutoTier; policy?: AutoRoutingPolicy };
   isAutoRouting: boolean;
   recognizedBuiltInAuto: boolean;
   response: Response | null;
@@ -28,7 +29,17 @@ function classifyAutoModel(
   const recognizedBuiltInAuto =
     model === "auto" || Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, model);
   if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, model)) {
-    return { variant: AUTO_TEMPLATE_VARIANTS[model], recognizedBuiltInAuto: true };
+    const policy =
+      model === "auto/bestfree"
+        ? "free-first-paid-fallback"
+        : model === "auto/bestcodex"
+          ? "codex-paid-free"
+          : undefined;
+    return {
+      variant: AUTO_TEMPLATE_VARIANTS[model],
+      ...(policy ? { spec: { policy } } : {}),
+      recognizedBuiltInAuto: true,
+    };
   }
   if (!model.startsWith("auto/")) return { recognizedBuiltInAuto };
 
