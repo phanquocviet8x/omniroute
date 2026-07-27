@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { classifyProviderError, PROVIDER_ERROR_TYPES } =
+const { classifyProviderError, modelUnavailableCooldownMs, PROVIDER_ERROR_TYPES } =
   await import("../../open-sse/services/errorClassifier.ts");
 
 test("classifyProviderError: 401 + account_deactivated => ACCOUNT_DEACTIVATED", () => {
@@ -132,10 +132,15 @@ test("classifyProviderError: 404 => MODEL_NOT_FOUND", () => {
 });
 
 test("classifyProviderError: 404 with provider => MODEL_NOT_FOUND", () => {
-  const result = classifyProviderError(
-    404,
-    { error: { message: "Not Found" } },
-    "v0-vercel"
-  );
+  const result = classifyProviderError(404, { error: { message: "Not Found" } }, "v0-vercel");
   assert.equal(result, PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND);
+});
+
+test("Codex ChatGPT unsupported-model 400 is a per-account model mismatch", () => {
+  const body = {
+    detail: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+  };
+  const result = classifyProviderError(400, body, "codex");
+  assert.equal(result, PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND);
+  assert.equal(modelUnavailableCooldownMs(400, "codex", body), 24 * 60 * 60 * 1000);
 });

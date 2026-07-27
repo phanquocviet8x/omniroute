@@ -112,6 +112,28 @@ export function containsModelUnavailableMessage(errorMessage: string): boolean {
   return MODEL_NAMED_UNSUPPORTED_REGEX.test(String(errorMessage || "").toLowerCase());
 }
 
+/**
+ * Unsupported Codex models are an account/model entitlement mismatch, not a
+ * transient outage. Keep that pair out of routing long enough for other Codex
+ * accounts to be selected, while leaving the account usable for other models.
+ */
+export function modelUnavailableCooldownMs(
+  statusCode: number,
+  provider: string | null | undefined,
+  responseBody: unknown
+): number | null {
+  const body = responseBodyToString(responseBody);
+  if (
+    statusCode === 400 &&
+    String(provider || "").toLowerCase() === "codex" &&
+    containsModelUnavailableMessage(body) &&
+    /using codex with a chatgpt account/i.test(body)
+  ) {
+    return 24 * 60 * 60 * 1000;
+  }
+  return null;
+}
+
 function responseBodyToString(responseBody: unknown): string {
   if (typeof responseBody === "string") return responseBody;
   if (responseBody !== null && typeof responseBody === "object") {

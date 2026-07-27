@@ -165,6 +165,7 @@ import {
 } from "@/lib/resilience/settings";
 import {
   classifyProviderError,
+  modelUnavailableCooldownMs,
   PROVIDER_ERROR_TYPES,
   isEmptyContentResponse,
 } from "../services/errorClassifier.ts";
@@ -3675,7 +3676,8 @@ export async function handleChatCore({
           // retry/backoff loop stops hammering the dead endpoint (which would
           // otherwise degenerate into a 429 rate-limit storm). Connection stays
           // active since only the specific model is unavailable. (#6827)
-          const notFoundCooldownMs = COOLDOWN_MS.notFound;
+          const notFoundCooldownMs =
+            modelUnavailableCooldownMs(statusCode, provider, message) ?? COOLDOWN_MS.notFound;
           lockModel(
             provider,
             errorConnectionId,

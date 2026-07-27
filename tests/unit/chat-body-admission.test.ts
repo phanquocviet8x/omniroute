@@ -36,7 +36,12 @@ test("small known body is admitted without consuming heavyweight capacity", asyn
 test("a byte-light request above the message threshold acquires heavyweight capacity", async () => {
   const controller = new ChatAdmissionController(1);
   const result = admitChatStructure(
-    { messages: [{ role: "user", content: "one" }, { role: "user", content: "two" }] },
+    {
+      messages: [
+        { role: "user", content: "one" },
+        { role: "user", content: "two" },
+      ],
+    },
     null,
     { controller, maxMessages: 10, heavyMessages: 2, heavyTools: 10, heavyTokens: 10_000 }
   );
@@ -151,11 +156,13 @@ test("non-ASCII strings use a conservative UTF-8 token estimate", () => {
 test("wide objects exhaust bounded inspection without materializing all property values", () => {
   const controller = new ChatAdmissionController(1);
   const wide = Object.fromEntries(Array.from({ length: 10_001 }, (_, index) => [`k${index}`, 0]));
-  const result = admitChatStructure(
-    { messages: [{ role: "user", content: wide }] },
-    null,
-    { controller, maxMessages: 10, heavyMessages: 10, heavyTools: 10, heavyTokens: 10_000 }
-  );
+  const result = admitChatStructure({ messages: [{ role: "user", content: wide }] }, null, {
+    controller,
+    maxMessages: 10,
+    heavyMessages: 10,
+    heavyTools: 10,
+    heavyTokens: 10_000,
+  });
 
   assert.equal(result.admit, true);
   assert.equal(controller.activeHeavy, 1);
@@ -168,7 +175,12 @@ test("an existing byte-heavy lease is reused for structure-heavy admission", () 
   assert.ok(lease);
 
   const result = admitChatStructure(
-    { messages: [{ role: "user", content: "one" }, { role: "user", content: "two" }] },
+    {
+      messages: [
+        { role: "user", content: "one" },
+        { role: "user", content: "two" },
+      ],
+    },
     lease,
     { controller, maxMessages: 10, heavyMessages: 2, heavyTools: 10, heavyTokens: 10_000 }
   );
@@ -199,6 +211,12 @@ test("heavyweight admission is atomic and returns retryable 503 at capacity", as
   first.lease?.release();
   first.lease?.release();
   assert.equal(controller.activeHeavy, 0, "release must be idempotent");
+});
+
+test("default heavyweight capacity allows two simultaneous long-context chats", async () => {
+  const source =
+    await import("../../src/shared/middleware/chatBodyAdmission.ts?default-capacity-test");
+  assert.equal(source.CHAT_MAX_HEAVY_IN_FLIGHT, 2);
 });
 
 test("small unknown-length bodies do not consume heavyweight capacity", async () => {

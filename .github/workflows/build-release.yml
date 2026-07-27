@@ -1,0 +1,27 @@
+name: Build release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*-sulashop.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: node --import tsx/esm --test tests/unit/chat-body-admission.test.ts tests/unit/error-classifier.test.ts
+      - run: npm run typecheck:core
+      - run: npm run build:release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omniroute-dist
+          path: dist/
+          retention-days: 7
