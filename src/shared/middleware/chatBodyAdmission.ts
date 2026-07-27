@@ -60,7 +60,7 @@ export interface ChatAdmissionLease {
 export class ChatAdmissionController {
   #activeHeavy = 0;
 
-  constructor(readonly maxHeavyInFlight = 1) {
+  constructor(readonly maxHeavyInFlight = 2) {
     if (!Number.isSafeInteger(maxHeavyInFlight) || maxHeavyInFlight < 1) {
       throw new RangeError("maxHeavyInFlight must be a positive integer");
     }

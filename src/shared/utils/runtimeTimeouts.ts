@@ -6,8 +6,11 @@ type ReadTimeoutOptions = {
   logger?: TimeoutLogger;
 };
 
-export const DEFAULT_FETCH_TIMEOUT_MS = 600_000;
-export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 600_000;
+// Bound a stalled upstream/body read to five minutes. Codex can still stream
+// indefinitely while producing data, but a dead stream must not retain a heavy
+// admission lease until the platform's observed ~15-minute transport kill.
+export const DEFAULT_FETCH_TIMEOUT_MS = 300_000;
+export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
 export const MAX_TIMER_TIMEOUT_MS = 2_147_483_647;
 export const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 export const DEFAULT_STREAM_READINESS_TIMEOUT_MS = 80_000;

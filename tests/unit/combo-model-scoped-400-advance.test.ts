@@ -26,6 +26,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "combo-model-400-test-secret";
 
 const { handleComboChat, isModelScoped400 } = await import("../../open-sse/services/combo.ts");
+const { isModelLocked } = await import("../../open-sse/services/accountFallback.ts");
 
 const noop = () => {};
 const log = { info: noop, warn: noop, debug: noop, error: noop };
@@ -53,7 +54,10 @@ test("isModelScoped400 recognizes model-not-supported shapes (incl. invalid/Bad 
   assert.equal(isModelScoped400("Bad Request: The model is not supported"), true);
   assert.equal(isModelScoped400("model claude-fable-5 does not support Responses API."), true);
   assert.equal(isModelScoped400("unsupported_api_for_model"), true);
-  assert.equal(isModelScoped400("The model `x` does not exist or you do not have access to it."), true);
+  assert.equal(
+    isModelScoped400("The model `x` does not exist or you do not have access to it."),
+    true
+  );
   // Genuinely body-specific — must NOT be treated as model-scoped
   assert.equal(isModelScoped400("Invalid message format: the request body is malformed."), false);
   assert.equal(isModelScoped400("malformed JSON in request body"), false);
@@ -68,7 +72,10 @@ async function assertAdvancesOn(errorMessage: string, label: string) {
     handleSingleModel: async (_body: unknown, modelStr: string) => {
       modelsCalled.push(modelStr);
       if (modelStr === "github/claude-fable-5") {
-        return Response.json({ error: { message: errorMessage, type: "invalid_request_error" } }, { status: 400 });
+        return Response.json(
+          { error: { message: errorMessage, type: "invalid_request_error" } },
+          { status: 400 }
+        );
       }
       return okResponse(modelStr);
     },
@@ -104,6 +111,38 @@ test("combo advances when first target returns Bad Request + model not supported
   await assertAdvancesOn("Bad Request: The model is not supported", "Bad Request wrapper");
 });
 
+test("model-scoped 400 locks only the rejected account/model pair", async () => {
+  const response = await handleComboChat({
+    body: { model: "test", messages: [{ role: "user", content: "hi" }] },
+    combo: {
+      name: "codex-account-model-compatibility",
+      strategy: "priority",
+      models: [
+        { model: "codex/gpt-5.6-sol", connectionId: "codex-account-a" },
+        { model: "codex/gpt-5.5", connectionId: "codex-account-b" },
+      ],
+    },
+    handleSingleModel: async (_body: unknown, modelStr: string) =>
+      modelStr === "codex/gpt-5.6-sol"
+        ? Response.json(
+            {
+              detail:
+                "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+            },
+            { status: 400 }
+          )
+        : okResponse(modelStr),
+    log,
+    settings: {},
+    allCombos: [],
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(isModelLocked("codex", "codex-account-a", "gpt-5.6-sol"), true);
+  assert.equal(isModelLocked("codex", "codex-account-a", "gpt-5.5"), false);
+  assert.equal(isModelLocked("codex", "codex-account-b", "gpt-5.6-sol"), false);
+});
+
 test("combo advances when first target rejects model for Responses API", async () => {
   await assertAdvancesOn(
     "model claude-fable-5 does not support Responses API.",
@@ -128,6 +167,10 @@ test("combo still STOPS on genuinely body-specific invalid message format", asyn
     allCombos: [],
   });
 
-  assert.equal(modelsCalled.length, 1, `body-specific 400 must stop at target 1; tried: ${modelsCalled.join(", ")}`);
+  assert.equal(
+    modelsCalled.length,
+    1,
+    `body-specific 400 must stop at target 1; tried: ${modelsCalled.join(", ")}`
+  );
   assert.equal(response.status, 400, "body-specific 400 must surface to the client");
 });

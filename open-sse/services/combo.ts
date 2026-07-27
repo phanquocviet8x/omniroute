@@ -15,6 +15,7 @@ import {
   getRuntimeProviderProfile,
   hasPerModelQuota,
   isModelLocked,
+  lockModel,
   MODEL_ACCESS_DENIED_PATTERNS,
   recordModelLockoutFailure,
   recordProviderFailure,
@@ -2305,6 +2306,26 @@ export async function handleComboChat({
           const targetWithConnection = selectedConnectionId
             ? { ...target, connectionId: selectedConnectionId }
             : target;
+
+          // A model-scoped 400 means this account cannot serve this model, not
+          // that the whole Codex account is unhealthy. Remember that exact
+          // account/model pair so later auto-combo requests skip it while the
+          // account remains eligible for every other Codex model.
+          if (
+            result.status === 400 &&
+            isModelScoped400(errorText) &&
+            provider &&
+            rawModel &&
+            targetWithConnection.connectionId
+          ) {
+            lockModel(
+              provider,
+              targetWithConnection.connectionId,
+              rawModel,
+              "model_access_denied",
+              24 * 60 * 60 * 1000
+            );
+          }
 
           // #1731 / #1731v2: classify the upstream error and update the exhaustion sets
           // (shared with handleRoundRobinCombo). Returns whether the provider is fully exhausted.

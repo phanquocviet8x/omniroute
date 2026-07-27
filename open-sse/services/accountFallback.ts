@@ -434,7 +434,7 @@ function getModelLockKey(
 ) {
   const canonicalProvider = getCanonicalLockProvider(provider);
   const lockModel =
-    reason === "not_found" || status === 404
+    reason === "not_found" || reason === "model_access_denied" || status === 404
       ? model
       : canonicalProvider === "codex"
         ? getCodexModelScope(model)
