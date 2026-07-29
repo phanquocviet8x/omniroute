@@ -11,6 +11,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
+const providerRegistry = await import("../../open-sse/config/providerRegistry.ts");
 const virtualFactory = await import("../../open-sse/services/autoCombo/virtualFactory.ts");
 
 type VirtualComboResult = Awaited<ReturnType<typeof virtualFactory.createVirtualAutoCombo>>;
@@ -246,26 +247,27 @@ test("createVirtualAutoCombo keeps credential-required providers out when discon
   );
 });
 
-test("createVirtualAutoCombo with codex-only policy only exposes Codex accounts and models", async () => {
+test("createVirtualAutoCombo with codex-only policy exposes every Codex model across every eligible account", async () => {
+  const tokenExpiresAt = new Date(Date.now() + 60_000).toISOString();
   const codexA = await providersDb.createProviderConnection({
     provider: "codex",
-    authType: "apikey",
+    authType: "oauth",
     name: "Codex A",
-    apiKey: "codex-token-a",
-    defaultModel: "gpt-5.2-codex",
+    accessToken: "fake-codex-access-token-a",
+    tokenExpiresAt,
   });
   const codexB = await providersDb.createProviderConnection({
     provider: "codex",
-    authType: "apikey",
+    authType: "oauth",
     name: "Codex B",
-    apiKey: "codex-token-b",
-    defaultModel: "gpt-5.2-codex",
+    accessToken: "fake-codex-access-token-b",
+    tokenExpiresAt,
   });
   await providersDb.createProviderConnection({
     provider: "openai",
     authType: "apikey",
     name: "OpenAI",
-    apiKey: "openai-token",
+    apiKey: "test-openai",
     defaultModel: "gpt-4o-mini",
   });
 
@@ -276,14 +278,25 @@ test("createVirtualAutoCombo with codex-only policy only exposes Codex accounts 
   assert.ok(combo.models.length >= 1);
   assert.deepEqual(new Set(combo.models.map((model) => model.providerId)), new Set(["codex"]));
   assert.deepEqual(combo.autoConfig.candidatePool, ["codex"]);
-  assert.equal(combo.autoConfig.routingPolicy, "codex-only");
-
-  const sharedCodexModel = combo.models.find((model) => model.model === "codex/gpt-5.2-codex");
-  assert.ok(sharedCodexModel, "configured Codex default model should be available");
-  assert.equal(sharedCodexModel.connectionId, null);
-  assert.deepEqual(
-    new Set(sharedCodexModel.allowedConnectionIds),
-    new Set([codexA.id, codexB.id]),
-    "auto/codex must keep all eligible Codex accounts for account fallback/rotation"
+  assert.equal(
+    (combo.autoConfig as typeof combo.autoConfig & { routingPolicy?: string }).routingPolicy,
+    "codex-only"
   );
+
+  assert.ok(codexA && codexB, "expected both Codex OAuth accounts to be created");
+  const codexRegistry = providerRegistry.REGISTRY.codex.models.map((model) => `codex/${model.id}`);
+  assert.deepEqual(
+    new Set(combo.models.map((model) => model.model)),
+    new Set(codexRegistry),
+    "auto/codex must expose every visible model from the Codex registry"
+  );
+
+  for (const model of combo.models) {
+    assert.equal(model.connectionId, null, `${model.model} must remain a logical model candidate`);
+    assert.deepEqual(
+      new Set(model.allowedConnectionIds),
+      new Set([codexA.id, codexB.id]),
+      `${model.model} must keep every eligible Codex account for smart account rotation`
+    );
+  }
 });

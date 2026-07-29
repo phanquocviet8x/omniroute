@@ -297,16 +297,47 @@ export async function resolveAutoStrategyOrder(
   for (const candidate of candidates) {
     candidate.cacheAffinity = cacheAffinityScores.get(promptCacheTargetIdentity(candidate)) ?? 0;
   }
-  const routableCandidates = candidates.filter(
+  const quotaEligibleCandidates = candidates.filter(
     (candidate) => candidate.quotaCutoffBlocked !== true
   );
-  const quotaBlockedCount = candidates.length - routableCandidates.length;
+  const quotaBlockedCount = candidates.length - quotaEligibleCandidates.length;
   if (quotaBlockedCount > 0) {
     log.info(
       "COMBO",
       `Auto strategy: quota cutoff skipped ${quotaBlockedCount}/${candidates.length} account candidates`
     );
   }
+
+  // Strict Codex routing treats an OPEN circuit as unavailable, not merely as a
+  // lower scoring signal. Model priority must never keep an OPEN candidate in
+  // the primary or fallback chain, and a fully unhealthy Codex pool must fail
+  // closed instead of escaping to another provider.
+  const routableCandidates =
+    routingPolicy === "codex-only"
+      ? quotaEligibleCandidates.filter(
+          (candidate) => candidate.provider === "codex" && candidate.circuitBreakerState !== "OPEN"
+        )
+      : quotaEligibleCandidates;
+  if (routingPolicy === "codex-only") {
+    const healthBlockedCount = quotaEligibleCandidates.filter(
+      (candidate) => candidate.provider === "codex" && candidate.circuitBreakerState === "OPEN"
+    ).length;
+    if (healthBlockedCount > 0) {
+      log.info(
+        "COMBO",
+        `Auto policy codex-only: circuit health skipped ${healthBlockedCount} OPEN candidate(s)`
+      );
+    }
+    if (routableCandidates.length === 0) {
+      return {
+        earlyResponse: unavailableResponse(
+          503,
+          "No healthy Codex candidates remain after quota and circuit health filtering"
+        ),
+      };
+    }
+  }
+
   // G2: Register candidates so chatCore can mark quotaSoftPenalty via setCandidateQuotaSoftPenalty.
   _registerExecutionCandidates(routableCandidates);
   if (candidates.length > 0 && routableCandidates.length === 0) {
@@ -427,16 +458,13 @@ export async function resolveAutoStrategyOrder(
       if (paid.length) policyStages.push(paid);
       if (free.length) policyStages.push(free);
     } else if (routingPolicy === "codex-only") {
+      // Keep the full healthy Codex pool in one stage so quota, health, latency,
+      // stability, and other live telemetry are compared across models. Stable
+      // Codex model priority is used only as a deterministic tie-breaker after
+      // scoring; splitting every model into its own stage makes priority absolute
+      // and prevents smart rotation when a preferred model degrades.
       const codex = routableCandidates.filter((candidate) => candidate.provider === "codex");
-      const codexByModel = new Map<number, AutoProviderCandidate[]>();
-      for (const candidate of codex) {
-        const rank = getCodexModelPriority(candidate.model);
-        codexByModel.set(rank, [...(codexByModel.get(rank) || []), candidate]);
-      }
-      for (const rank of [...codexByModel.keys()].sort((a, b) => a - b)) {
-        const stage = codexByModel.get(rank);
-        if (stage?.length) policyStages.push(stage);
-      }
+      if (codex.length) policyStages.push(codex);
     } else {
       policyStages.push(routableCandidates);
     }
@@ -449,6 +477,20 @@ export async function resolveAutoStrategyOrder(
     const scoredTargets = policyStages.flatMap((stage) =>
       scoreAutoTargets(eligibleTargets, stage, taskType, weights, autoManifestHint)
     );
+    if (routingPolicy === "codex-only") {
+      // scoreAutoTargets already orders by live telemetry. For materially equal
+      // scores, prefer the stable Codex model order without overriding meaningful
+      // quota/health/latency differences.
+      const SCORE_TIE_EPSILON = 0.000_001;
+      scoredTargets.sort((a, b) => {
+        const scoreDelta = b.score - a.score;
+        if (Math.abs(scoreDelta) > SCORE_TIE_EPSILON) return scoreDelta;
+        return (
+          getCodexModelPriority(parseModel(a.target.modelStr).model || a.target.modelStr) -
+          getCodexModelPriority(parseModel(b.target.modelStr).model || b.target.modelStr)
+        );
+      });
+    }
     const rankedTargets = scoredTargets.map((entry) => entry.target);
     const selectedTarget =
       (routingPolicy ? rankedTargets[0] : undefined) ||

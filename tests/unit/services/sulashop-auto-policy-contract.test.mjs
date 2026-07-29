@@ -11,10 +11,11 @@ test("custom channels use distinct non-upstream names", () => {
   assert.match(catalog, /"auto\/best-free": "cheap"/);
 });
 
-test("request routing assigns strict policy only to custom channels", () => {
+test("request routing assigns the intended strict policy to each custom channel", () => {
   const source = read("src/sse/handlers/autoRouting.ts");
   assert.match(source, /model === "auto\/bestfree"[\s\S]*?"free-first-paid-fallback"/);
   assert.match(source, /model === "auto\/bestcodex"[\s\S]*?"codex-paid-free"/);
+  assert.match(source, /model === "auto\/codex"[\s\S]*?"codex-only"/);
 });
 
 test("free-first and Codex-first stages are preserved through execution ordering", () => {

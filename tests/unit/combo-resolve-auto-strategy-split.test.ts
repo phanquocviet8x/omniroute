@@ -345,3 +345,201 @@ test("codex-only routing policy stages only Codex candidates and preserves Codex
   );
   assert.equal(result.autoUsedExplicitRouter, true);
 });
+
+test("codex-only policy honors quota, health, and latency within the Codex pool", async () => {
+  const candidates = [
+    {
+      kind: "model",
+      stepId: "quota-blocked",
+      executionKey: "codex>gpt-5.6-sol-ultra",
+      modelStr: "gpt-5.6-sol-ultra",
+      provider: "codex",
+      model: "gpt-5.6-sol-ultra",
+      quotaCutoffBlocked: true,
+      quotaRemaining: 0,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 1,
+      p95LatencyMs: 10,
+      latencyStdDev: 1,
+      errorRate: 0,
+    },
+    {
+      kind: "model",
+      stepId: "unhealthy",
+      executionKey: "codex>gpt-5.6-sol-max",
+      modelStr: "gpt-5.6-sol-max",
+      provider: "codex",
+      model: "gpt-5.6-sol-max",
+      quotaRemaining: 100,
+      quotaTotal: 100,
+      circuitBreakerState: "OPEN",
+      costPer1MTokens: 1,
+      p95LatencyMs: 10,
+      latencyStdDev: 1,
+      errorRate: 1,
+    },
+    {
+      kind: "model",
+      stepId: "healthy-fast",
+      executionKey: "codex>gpt-5.6-terra-high",
+      modelStr: "gpt-5.6-terra-high",
+      provider: "codex",
+      model: "gpt-5.6-terra-high",
+      quotaRemaining: 90,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 1,
+      p95LatencyMs: 100,
+      latencyStdDev: 10,
+      errorRate: 0,
+    },
+    {
+      kind: "model",
+      stepId: "non-codex",
+      executionKey: "opencode>big-pickle",
+      modelStr: "big-pickle",
+      provider: "opencode",
+      model: "big-pickle",
+      quotaRemaining: 100,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 0,
+      p95LatencyMs: 1,
+      latencyStdDev: 1,
+      errorRate: 0,
+    },
+  ] as never;
+  const deps = baseDeps((async () => candidates) as never);
+  deps.orderedTargets = [
+    target("codex", "gpt-5.6-sol-ultra"),
+    target("codex", "gpt-5.6-sol-max"),
+    target("codex", "gpt-5.6-terra-high"),
+    target("opencode", "big-pickle"),
+  ];
+  deps.combo.autoConfig = {
+    candidatePool: ["codex", "opencode"],
+    routingPolicy: "codex-only",
+    explorationRate: 0,
+  };
+
+  const result = await resolveAutoStrategyOrder(deps);
+  assert.ok("orderedTargets" in result, "expected a normal Codex-only ordering result");
+  if (!("orderedTargets" in result)) return;
+
+  assert.equal(result.orderedTargets[0].provider, "codex");
+  assert.equal(result.orderedTargets[0].modelStr, "gpt-5.6-terra-high");
+  assert.equal(
+    result.orderedTargets.some((candidate) => candidate.provider !== "codex"),
+    false,
+    "health/quota fallback must stay inside Codex"
+  );
+  assert.equal(
+    result.orderedTargets.some((candidate) => candidate.modelStr === "gpt-5.6-sol-ultra"),
+    false,
+    "quota-cutoff Codex candidates must not be selected"
+  );
+  assert.equal(
+    result.orderedTargets.some((candidate) => candidate.modelStr === "gpt-5.6-sol-max"),
+    false,
+    "circuit-OPEN Codex candidates must not remain in the fallback tail"
+  );
+});
+
+test("codex-only policy lets material quota, health, and latency advantages beat model preference", async () => {
+  const candidates = [
+    {
+      kind: "model",
+      stepId: "preferred-but-degraded",
+      executionKey: "codex>gpt-5.6-sol-ultra",
+      modelStr: "gpt-5.6-sol-ultra",
+      provider: "codex",
+      model: "gpt-5.6-sol-ultra",
+      quotaRemaining: 15,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 1,
+      p95LatencyMs: 5000,
+      latencyStdDev: 1000,
+      errorRate: 0.4,
+    },
+    {
+      kind: "model",
+      stepId: "healthy-fast",
+      executionKey: "codex>gpt-5.6-terra-high",
+      modelStr: "gpt-5.6-terra-high",
+      provider: "codex",
+      model: "gpt-5.6-terra-high",
+      quotaRemaining: 90,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 1,
+      p95LatencyMs: 100,
+      latencyStdDev: 10,
+      errorRate: 0,
+    },
+  ] as never;
+  const deps = baseDeps((async () => candidates) as never);
+  deps.orderedTargets = [
+    target("codex", "gpt-5.6-sol-ultra"),
+    target("codex", "gpt-5.6-terra-high"),
+  ];
+  deps.combo.autoConfig = {
+    candidatePool: ["codex"],
+    routingPolicy: "codex-only",
+    explorationRate: 0,
+  };
+
+  const result = await resolveAutoStrategyOrder(deps);
+  assert.ok("orderedTargets" in result, "expected a normal Codex-only ordering result");
+  if (!("orderedTargets" in result)) return;
+  assert.equal(result.orderedTargets[0].modelStr, "gpt-5.6-terra-high");
+});
+
+test("codex-only policy fails closed when no healthy Codex candidate remains", async () => {
+  const candidates = [
+    {
+      kind: "model",
+      stepId: "open-codex",
+      executionKey: "codex>gpt-5.6-sol-ultra",
+      modelStr: "gpt-5.6-sol-ultra",
+      provider: "codex",
+      model: "gpt-5.6-sol-ultra",
+      quotaRemaining: 100,
+      quotaTotal: 100,
+      circuitBreakerState: "OPEN",
+      costPer1MTokens: 1,
+      p95LatencyMs: 100,
+      latencyStdDev: 10,
+      errorRate: 1,
+    },
+    {
+      kind: "model",
+      stepId: "open-code",
+      executionKey: "opencode>big-pickle",
+      modelStr: "big-pickle",
+      provider: "opencode",
+      model: "big-pickle",
+      quotaRemaining: 100,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 0,
+      p95LatencyMs: 1,
+      latencyStdDev: 1,
+      errorRate: 0,
+    },
+  ] as never;
+  const deps = baseDeps((async () => candidates) as never);
+  deps.orderedTargets = [target("codex", "gpt-5.6-sol-ultra"), target("opencode", "big-pickle")];
+  deps.combo.autoConfig = {
+    candidatePool: ["codex", "opencode"],
+    routingPolicy: "codex-only",
+    explorationRate: 0,
+  };
+
+  const result = await resolveAutoStrategyOrder(deps);
+  assert.ok("earlyResponse" in result, "strict Codex routing must fail closed");
+  if (!("earlyResponse" in result)) return;
+  assert.equal(result.earlyResponse.status, 503);
+  assert.match(await result.earlyResponse.text(), /healthy Codex/i);
+});
