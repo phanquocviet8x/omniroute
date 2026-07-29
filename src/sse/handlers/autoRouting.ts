@@ -34,7 +34,9 @@ function classifyAutoModel(
         ? "free-first-paid-fallback"
         : model === "auto/bestcodex"
           ? "codex-paid-free"
-          : undefined;
+          : model === "auto/codex"
+            ? "codex-only"
+            : undefined;
     return {
       variant: AUTO_TEMPLATE_VARIANTS[model],
       ...(policy ? { spec: { policy } } : {}),
