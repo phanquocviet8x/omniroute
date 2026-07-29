@@ -44,6 +44,7 @@ export const AUTO_TEMPLATE_VARIANTS: Record<string, AutoVariant | undefined> = {
   // SulaShop custom channels intentionally avoid upstream's hyphenated names.
   "auto/bestfree": "cheap",
   "auto/bestcodex": "coding",
+  "auto/codex": "coding",
   // Chaos mode — parallel dispatch to top-N stable models
   "auto/best-chaos": "chaos",
   "auto/chaos": "chaos",
@@ -125,9 +126,11 @@ export async function createBuiltinAutoCombo(modelStr: string, suffix: string) {
         ? { policy: "free-first-paid-fallback" as const }
         : modelStr === "auto/bestcodex"
           ? { policy: "codex-paid-free" as const }
-          : modelStr === "auto/best-free"
-            ? { tier: "free" as const }
-            : undefined;
+          : modelStr === "auto/codex"
+            ? { policy: "codex-only" as const }
+            : modelStr === "auto/best-free"
+              ? { tier: "free" as const }
+              : undefined;
     const virtualCombo = await createVirtualAutoCombo(resolved.variant, spec);
     virtualCombo.name = modelStr;
     virtualCombo.id = modelStr;

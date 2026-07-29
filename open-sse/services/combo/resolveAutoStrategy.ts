@@ -426,6 +426,17 @@ export async function resolveAutoStrategyOrder(
       }
       if (paid.length) policyStages.push(paid);
       if (free.length) policyStages.push(free);
+    } else if (routingPolicy === "codex-only") {
+      const codex = routableCandidates.filter((candidate) => candidate.provider === "codex");
+      const codexByModel = new Map<number, AutoProviderCandidate[]>();
+      for (const candidate of codex) {
+        const rank = getCodexModelPriority(candidate.model);
+        codexByModel.set(rank, [...(codexByModel.get(rank) || []), candidate]);
+      }
+      for (const rank of [...codexByModel.keys()].sort((a, b) => a - b)) {
+        const stage = codexByModel.get(rank);
+        if (stage?.length) policyStages.push(stage);
+      }
     } else {
       policyStages.push(routableCandidates);
     }
@@ -465,8 +476,9 @@ export async function resolveAutoStrategyOrder(
     // routable ranked ones (and, when the cutoff is OFF, makes this identical to
     // the pre-cutoff behavior), but a quota-blocked target still survives as a
     // final fallback instead of vanishing — the hard cutoff only de-prioritizes.
+    const fallbackTail = routingPolicy === "codex-only" ? rankedTargets : eligibleTargets;
     orderedTargets = dedupeTargetsByExecutionKey(
-      [selectedTarget, ...rankedTargets, ...eligibleTargets].filter(
+      [selectedTarget, ...rankedTargets, ...fallbackTail].filter(
         (entry): entry is ResolvedComboTarget => entry !== undefined && entry !== null
       )
     );

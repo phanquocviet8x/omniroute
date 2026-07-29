@@ -64,7 +64,8 @@ export function parseAutoConfig(combo: ComboLike, eligibleTargets: ResolvedCombo
   const slaPolicy = resolveSlaRoutingPolicy(autoConfigSource);
   const routingPolicy =
     autoConfigSource.routingPolicy === "free-first-paid-fallback" ||
-    autoConfigSource.routingPolicy === "codex-paid-free"
+    autoConfigSource.routingPolicy === "codex-paid-free" ||
+    autoConfigSource.routingPolicy === "codex-only"
       ? autoConfigSource.routingPolicy
       : undefined;
 

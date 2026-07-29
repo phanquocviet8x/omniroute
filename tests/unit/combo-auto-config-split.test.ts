@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { parseAutoConfig } from "@omniroute/open-sse/services/combo/autoConfig.ts";
-import { DEFAULT_WEIGHTS, normalizeScoringWeights } from "@omniroute/open-sse/services/autoCombo/scoring.ts";
+import {
+  DEFAULT_WEIGHTS,
+  normalizeScoringWeights,
+} from "@omniroute/open-sse/services/autoCombo/scoring.ts";
 import { MODE_PACKS } from "@omniroute/open-sse/services/autoCombo/modePacks.ts";
 
 // Split guard for Block J Task 2: parseAutoConfig was extracted verbatim from
@@ -106,4 +109,12 @@ test("non-finite explorationRate falls back to 0.05", () => {
     []
   );
   assert.equal(cfg.explorationRate, 0.05);
+});
+
+test("codex-only routing policy is accepted for auto/codex", () => {
+  const cfg = parseAutoConfig(
+    { name: "auto/codex", autoConfig: { routingPolicy: "codex-only" } } as never,
+    []
+  );
+  assert.equal(cfg.routingPolicy, "codex-only");
 });

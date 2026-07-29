@@ -271,3 +271,77 @@ test("per-request X-OmniRoute-Mode override changes the EFFECTIVE weights used f
     native.orderedTargets.map((t) => t.provider)
   );
 });
+
+test("codex-only routing policy stages only Codex candidates and preserves Codex priority", async () => {
+  const candidates = [
+    {
+      kind: "model",
+      stepId: "codex-low",
+      executionKey: "codex>gpt-5.2-codex-low",
+      modelStr: "gpt-5.2-codex-low",
+      provider: "codex",
+      model: "gpt-5.2-codex-low",
+      quotaRemaining: 100,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 1,
+      p95LatencyMs: 100,
+      latencyStdDev: 10,
+      errorRate: 0,
+    },
+    {
+      kind: "model",
+      stepId: "openai",
+      executionKey: "openai>gpt-4o",
+      modelStr: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      quotaRemaining: 100,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 1,
+      p95LatencyMs: 10,
+      latencyStdDev: 1,
+      errorRate: 0,
+    },
+    {
+      kind: "model",
+      stepId: "codex-high",
+      executionKey: "codex>gpt-5.2-codex-high",
+      modelStr: "gpt-5.2-codex-high",
+      provider: "codex",
+      model: "gpt-5.2-codex-high",
+      quotaRemaining: 100,
+      quotaTotal: 100,
+      circuitBreakerState: "CLOSED",
+      costPer1MTokens: 10,
+      p95LatencyMs: 5000,
+      latencyStdDev: 1000,
+      errorRate: 0,
+    },
+  ] as never;
+  const deps = baseDeps((async () => candidates) as never);
+  deps.orderedTargets = [
+    target("codex", "gpt-5.2-codex-low"),
+    target("openai", "gpt-4o"),
+    target("codex", "gpt-5.2-codex-high"),
+  ];
+  deps.combo.autoConfig = {
+    candidatePool: ["codex", "openai"],
+    routingPolicy: "codex-only",
+    explorationRate: 0,
+  };
+
+  const result = await resolveAutoStrategyOrder(deps);
+  assert.ok("orderedTargets" in result, "expected a normal ordering result, not earlyResponse");
+  if (!("orderedTargets" in result)) return;
+
+  assert.equal(result.orderedTargets[0].provider, "codex");
+  assert.equal(result.orderedTargets[1].provider, "codex");
+  assert.equal(
+    result.orderedTargets.some((target) => target.provider !== "codex"),
+    false,
+    "codex-only policy must not route/fallback to non-Codex providers"
+  );
+  assert.equal(result.autoUsedExplicitRouter, true);
+});

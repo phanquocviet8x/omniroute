@@ -245,3 +245,45 @@ test("createVirtualAutoCombo keeps credential-required providers out when discon
     "OpenAI should still require a real active connection"
   );
 });
+
+test("createVirtualAutoCombo with codex-only policy only exposes Codex accounts and models", async () => {
+  const codexA = await providersDb.createProviderConnection({
+    provider: "codex",
+    authType: "apikey",
+    name: "Codex A",
+    apiKey: "codex-token-a",
+    defaultModel: "gpt-5.2-codex",
+  });
+  const codexB = await providersDb.createProviderConnection({
+    provider: "codex",
+    authType: "apikey",
+    name: "Codex B",
+    apiKey: "codex-token-b",
+    defaultModel: "gpt-5.2-codex",
+  });
+  await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: "OpenAI",
+    apiKey: "openai-token",
+    defaultModel: "gpt-4o-mini",
+  });
+
+  const combo: VirtualComboResult = await virtualFactory.createVirtualAutoCombo("coding", {
+    policy: "codex-only",
+  });
+
+  assert.ok(combo.models.length >= 1);
+  assert.deepEqual(new Set(combo.models.map((model) => model.providerId)), new Set(["codex"]));
+  assert.deepEqual(combo.autoConfig.candidatePool, ["codex"]);
+  assert.equal(combo.autoConfig.routingPolicy, "codex-only");
+
+  const sharedCodexModel = combo.models.find((model) => model.model === "codex/gpt-5.2-codex");
+  assert.ok(sharedCodexModel, "configured Codex default model should be available");
+  assert.equal(sharedCodexModel.connectionId, null);
+  assert.deepEqual(
+    new Set(sharedCodexModel.allowedConnectionIds),
+    new Set([codexA.id, codexB.id]),
+    "auto/codex must keep all eligible Codex accounts for account fallback/rotation"
+  );
+});

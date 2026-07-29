@@ -21,7 +21,7 @@ import { buildFamilyCandidateFilter, type ModelFamily } from "./modelFamily";
 import { getHiddenModelsByProvider } from "@/models";
 import { filterPaidOnlyCandidates } from "./paidModelFilter";
 
-export type AutoRoutingPolicy = "free-first-paid-fallback" | "codex-paid-free";
+export type AutoRoutingPolicy = "free-first-paid-fallback" | "codex-paid-free" | "codex-only";
 import { isModelExcludedByConnection } from "@/domain/connectionModelRules";
 import { filterExcludedCandidates } from "./candidateOverrides";
 import { getExcludedConnectionIds } from "@/lib/db/autoCandidateOverrides";
@@ -515,6 +515,20 @@ export async function createVirtualAutoCombo(
         "AUTO",
         `${label} matched no connected models; returning an empty pool.${spec?.family ? "" : ' Set OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL=true to restore the legacy "use full pool" behavior.'}`
       );
+      effectivePool = [];
+    }
+  }
+
+  // SulaShop `auto/codex`: hard Codex-only channel. Reuse the existing
+  // candidate/account machinery (allowedConnectionIds, per-account exclusions,
+  // and quota preflight in combo routing), but never fall back to non-Codex
+  // providers the way `auto/bestcodex` can.
+  if (spec?.policy === "codex-only") {
+    const codexPool = effectivePool.filter((candidate) => candidate.provider === "codex");
+    if (codexPool.length > 0) {
+      effectivePool = codexPool;
+    } else {
+      log.warn("AUTO", "auto/codex matched no connected Codex candidates; returning an empty pool");
       effectivePool = [];
     }
   }
