@@ -95,6 +95,7 @@ import {
 import { getModelCatalogAuthRejection, isCodexModelCatalogClient } from "./catalogRequest";
 import { isFreeModel, providerHasFreeModels } from "@/shared/utils/freeModels";
 import { isCodexDiscoveryModelExcluded } from "@/shared/services/codexDiscoveryPolicy";
+import { appendProviderScopedAutoModels } from "./providerScopedAutoCatalog";
 
 // Public API of this module is preserved after the catalog helper extraction:
 // `isVisionModelId` (vision-detection-consistency.test.ts) and
@@ -1540,18 +1541,21 @@ async function buildUnifiedModelsResponseCore(
     };
 
     const includeModelNames = isModelCatalogNamesEnabled();
-    const enrichedModels = disambiguateCatalogModelNames(
-      finalModels.map((model) => {
-        if (model.owned_by === "combo") {
-          return maybeOmitCatalogModelName(model, includeModelNames);
-        }
-        const enriched = enrichCatalogModelEntry(model);
-        const fallbackContextLength = getDefaultContextFallback(enriched);
-        const listedModel = fallbackContextLength
-          ? { ...enriched, context_length: fallbackContextLength }
-          : enriched;
-        return maybeOmitCatalogModelName(listedModel, includeModelNames);
-      })
+    const enrichedModels = appendProviderScopedAutoModels(
+      disambiguateCatalogModelNames(
+        finalModels.map((model) => {
+          if (model.owned_by === "combo") {
+            return maybeOmitCatalogModelName(model, includeModelNames);
+          }
+          const enriched = enrichCatalogModelEntry(model);
+          const fallbackContextLength = getDefaultContextFallback(enriched);
+          const listedModel = fallbackContextLength
+            ? { ...enriched, context_length: fallbackContextLength }
+            : enriched;
+          return maybeOmitCatalogModelName(listedModel, includeModelNames);
+        })
+      ),
+      timestamp
     );
     // Codex CLI compatibility: its model-catalog refresh (codex_models_manager) does
     // GET /v1/models?client_version=<v> and decodes a JSON object with a TOP-LEVEL
