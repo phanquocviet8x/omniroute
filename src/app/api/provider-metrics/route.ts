@@ -7,6 +7,7 @@ import { getProviderMetrics } from "@/lib/db/callLogStats";
 import { toNumber } from "@/shared/utils/numeric";
 
 const logger = pino({ name: "provider-metrics-api" });
+const SAFE_TOPOLOGY_PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 /**
  * GET /api/provider-metrics — Aggregate per-provider stats from call_logs
@@ -27,6 +28,7 @@ export async function GET() {
         lastErrorAt: string | null;
         lastStatus: number | null;
         lastErrorStatus: number | null;
+        lastModel: string | null;
       }
     > = {};
     let lastProvider = "";
@@ -39,6 +41,10 @@ export async function GET() {
         typeof row.provider === "string" && row.provider.trim().length > 0
           ? row.provider
           : "unknown";
+      // Historical combo logs could store a comma-separated candidate/model list
+      // in the provider column. Those values are not provider identities and used
+      // to explode the topology into one apparent node per model.
+      if (!SAFE_TOPOLOGY_PROVIDER_ID.test(provider)) continue;
       const totalRequests = toNumber(row.totalRequests);
       const totalSuccesses = toNumber(row.totalSuccesses);
       const avgLatencyMs = toNumber(row.avgLatencyMs);
@@ -46,6 +52,7 @@ export async function GET() {
       const lastErrorAt = typeof row.lastErrorAt === "string" ? row.lastErrorAt : null;
       const lastStatus = row.lastStatus == null ? null : toNumber(row.lastStatus);
       const lastErrorStatus = row.lastErrorStatus == null ? null : toNumber(row.lastErrorStatus);
+      const lastModel = typeof row.lastModel === "string" ? row.lastModel : null;
       metrics[provider] = {
         totalRequests,
         totalSuccesses,
@@ -55,6 +62,7 @@ export async function GET() {
         lastErrorAt,
         lastStatus,
         lastErrorStatus,
+        lastModel,
       };
 
       const requestTs = lastRequestAt ? Date.parse(lastRequestAt) : 0;
@@ -66,8 +74,7 @@ export async function GET() {
       // Only flag as errorProvider if the provider's MOST RECENT request was itself
       // a failure. A provider with a historical lastErrorAt but a recent success
       // (lastStatus 2xx/3xx) must not be shown as currently errored (#3619).
-      const isCurrentlyInError =
-        lastStatus !== null && (lastStatus < 200 || lastStatus >= 400);
+      const isCurrentlyInError = lastStatus !== null && (lastStatus < 200 || lastStatus >= 400);
       const errorTs = isCurrentlyInError && lastErrorAt ? Date.parse(lastErrorAt) : 0;
       if (Number.isFinite(errorTs) && errorTs > errorProviderTs) {
         errorProvider = provider;
@@ -80,6 +87,7 @@ export async function GET() {
       topology: {
         providers: Object.keys(metrics),
         lastProvider,
+        lastModel: lastProvider ? metrics[lastProvider]?.lastModel || "" : "",
         errorProvider,
       },
     });

@@ -116,7 +116,11 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
   const [baseUrl, setBaseUrl] = useState("/v1");
   const [selectedProvider, setSelectedProvider] = useState(null);
   const [providerMetrics, setProviderMetrics] = useState<Record<string, ProviderMetricSummary>>({});
-  const [providerTopology, setProviderTopology] = useState({ lastProvider: "", errorProvider: "" });
+  const [providerTopology, setProviderTopology] = useState({
+    lastProvider: "",
+    lastModel: "",
+    errorProvider: "",
+  });
   const [providerNodes, setProviderNodes] = useState<
     Array<{ id?: string; prefix?: string; name?: string }>
   >([]);
@@ -311,6 +315,8 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
             setProviderMetrics(data.metrics || {});
             setProviderTopology({
               lastProvider: normalizeProviderId(data.topology?.lastProvider),
+              lastModel:
+                typeof data.topology?.lastModel === "string" ? data.topology.lastModel : "",
               errorProvider: normalizeProviderId(data.topology?.errorProvider),
             });
           }
@@ -514,7 +520,7 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
     return Array.from(byProvider.values());
   }, [providerStats, providerMetrics, providerNodes]);
 
-  const { lastProvider, errorProvider } = providerTopology;
+  const { lastProvider, lastModel, errorProvider } = providerTopology;
 
   const pollBackgroundUpdate = useCallback(
     async ({
@@ -1177,6 +1183,7 @@ export default function HomePageClient({ machineId }: HomePageClientProps) {
         <HomeProviderTopologySection
           providers={topologyProviders}
           lastProvider={lastProvider}
+          lastModel={lastModel}
           errorProvider={errorProvider}
           enabled={showProviderTopologyOnHome}
         />

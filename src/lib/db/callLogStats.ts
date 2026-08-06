@@ -23,6 +23,7 @@ export interface ProviderMetricRow {
   lastErrorAt: string | null;
   lastStatus: number | null;
   lastErrorStatus: number | null;
+  lastModel: string | null;
 }
 
 export interface SearchProviderStatRow {
@@ -83,6 +84,16 @@ export function getProviderMetrics(): ProviderMetricRow[] {
             ORDER BY c2.timestamp DESC, c2.id DESC
             LIMIT 1
           ) as lastStatus,
+          (
+            SELECT c_model.model
+            FROM call_logs c_model
+            WHERE c_model.provider = c.provider
+              AND c_model.model IS NOT NULL
+              AND c_model.model != '-'
+              AND c_model.model != 'connection-test'
+            ORDER BY c_model.timestamp DESC, c_model.id DESC
+            LIMIT 1
+          ) as lastModel,
           (
             SELECT c3.status
             FROM call_logs c3

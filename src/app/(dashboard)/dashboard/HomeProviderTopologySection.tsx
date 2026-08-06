@@ -20,11 +20,13 @@ type TopologyProvider = {
 export function HomeProviderTopologySection({
   providers,
   lastProvider,
+  lastModel,
   errorProvider,
   enabled = true,
 }: {
   providers: TopologyProvider[];
   lastProvider: string;
+  lastModel: string;
   errorProvider: string;
   enabled?: boolean;
 }) {
@@ -66,6 +68,7 @@ export function HomeProviderTopologySection({
         providers={providers}
         activeRequests={activeRequests}
         lastProvider={lastProvider}
+        lastModel={lastModel}
         errorProvider={errorProvider}
       />
     </Card>

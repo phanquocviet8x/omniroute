@@ -13,6 +13,11 @@ const providerTopologySrc = readFileSync(
   "utf8"
 );
 
+const providerMetricsRouteSrc = readFileSync(
+  fileURLToPath(new URL("../../src/app/api/provider-metrics/route.ts", import.meta.url)),
+  "utf8"
+);
+
 test("home topology uses provider-metrics topology.errorProvider instead of re-deriving from stale lastErrorAt", () => {
   assert.match(
     homePageClientSrc,
@@ -54,7 +59,29 @@ test("ProviderTopology treats live activeRequests as the current snapshot withou
   );
   assert.match(
     providerTopologySrc,
+    /if \(lastKey && lastModel && !models\.has\(lastKey\)\) models\.set\(lastKey, lastModel\)/,
+    "the most recently connected provider should keep showing its current model after the live request ends"
+  );
+  assert.match(
+    providerTopologySrc,
+    /new Set\(\[\.\.\.activeSet, \.\.\.\(lastKey && lastModel \? \[lastKey\] : \[\]\)\]\)/,
+    "the most recently connected provider should keep the active ring"
+  );
+  assert.match(
+    providerTopologySrc,
     /resolveTopologyNodeLabel\(undefined, config\.name, p\.provider\)/,
     "node labels must use the provider identity, not connection/model names"
+  );
+});
+
+test("provider metrics excludes historical model-list pseudo providers and exposes the last model", () => {
+  assert.match(providerMetricsRouteSrc, /SAFE_TOPOLOGY_PROVIDER_ID/);
+  assert.match(
+    providerMetricsRouteSrc,
+    /if \(!SAFE_TOPOLOGY_PROVIDER_ID\.test\(provider\)\) continue/
+  );
+  assert.match(
+    providerMetricsRouteSrc,
+    /lastModel: lastProvider \? metrics\[lastProvider\]\?\.lastModel \|\| "" : ""/
   );
 });

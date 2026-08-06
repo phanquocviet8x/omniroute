@@ -303,6 +303,7 @@ type Props = {
   providers?: ProviderEntry[];
   activeRequests?: Array<{ provider?: string; model?: string }>;
   lastProvider?: string;
+  lastModel?: string;
   errorProvider?: string;
 };
 
@@ -310,6 +311,7 @@ export default function ProviderTopology({
   providers = [],
   activeRequests = [],
   lastProvider = "",
+  lastModel = "",
   errorProvider = "",
 }: Props) {
   const t = useTranslations("common");
@@ -328,12 +330,21 @@ export default function ProviderTopology({
   }, [activeRequests]);
   const activeSet = useMemo(() => new Set(activeModels.keys()), [activeModels]);
   const lastSet = useMemo(() => new Set<string>(lastKey ? [lastKey] : []), [lastKey]);
+  const displayedModels = useMemo(() => {
+    const models = new Map(activeModels);
+    if (lastKey && lastModel && !models.has(lastKey)) models.set(lastKey, lastModel);
+    return models;
+  }, [activeModels, lastKey, lastModel]);
+  const displayedActiveSet = useMemo(
+    () => new Set([...activeSet, ...(lastKey && lastModel ? [lastKey] : [])]),
+    [activeSet, lastKey, lastModel]
+  );
   const errorSet = useMemo(() => new Set<string>(errorKey ? [errorKey] : []), [errorKey]);
 
   const { nodes, edges } = useMemo(
-    () => buildLayout(providers, activeSet, activeModels, lastSet, errorSet),
+    () => buildLayout(providers, displayedActiveSet, displayedModels, lastSet, errorSet),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [providers, activeSet, activeModels, lastKey, errorKey]
+    [providers, displayedActiveSet, displayedModels, lastKey, errorKey]
   );
 
   const providersKey = useMemo(
