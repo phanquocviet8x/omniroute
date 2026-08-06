@@ -39,6 +39,7 @@ type ProviderNodeData = {
   label: string;
   color: string;
   providerId: string;
+  currentModel?: string;
   active: boolean;
   error: boolean;
   /** Connection-health base state: a healthy connection with no in-flight traffic. */
@@ -48,7 +49,7 @@ type ProviderNodeData = {
 };
 
 function ProviderNode({ data }: { data: ProviderNodeData }) {
-  const { label, color, providerId, active, error, healthy, last } = data;
+  const { label, color, providerId, currentModel, active, error, healthy, last } = data;
   const GREEN = FLOW_EDGE_COLORS.active;
   const RED = FLOW_EDGE_COLORS.error;
   const AMBER = FLOW_EDGE_COLORS.last;
@@ -58,19 +59,30 @@ function ProviderNode({ data }: { data: ProviderNodeData }) {
 
   return (
     <div
-      className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border-2 transition-all duration-300 bg-bg"
+      className="relative flex items-center gap-2 px-2.5 py-1.5 rounded-lg border-2 transition-all duration-300 bg-bg"
       style={{
         borderColor: error ? RED : active ? color : healthy ? GREEN : "var(--color-border)",
         boxShadow: error
           ? `0 0 12px ${RED}30`
           : active
-            ? `0 0 12px ${color}30`
+            ? `0 0 18px ${color}55`
             : healthy
               ? `0 0 10px ${GREEN}20`
               : "none",
         minWidth: "136px",
       }}
     >
+      {active && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -inset-[5px] rounded-xl border-2 border-transparent animate-spin"
+          style={{
+            borderTopColor: color,
+            borderRightColor: `${color}70`,
+            animationDuration: "1.8s",
+          }}
+        />
+      )}
       <Handle
         type="target"
         position={Position.Top}
@@ -104,12 +116,17 @@ function ProviderNode({ data }: { data: ProviderNodeData }) {
       </div>
 
       <span
-        className="text-xs font-medium truncate flex-1"
+        className="min-w-0 text-xs font-medium flex-1"
         style={{
           color: active ? color : error ? RED : healthy ? GREEN : "var(--color-text-main)",
         }}
       >
-        {label}
+        <span className="block truncate">{label}</span>
+        {active && currentModel && (
+          <span className="block max-w-[108px] truncate text-[10px] font-normal text-text-muted">
+            {currentModel}
+          </span>
+        )}
       </span>
 
       {(active || error || healthy || last) && (
@@ -184,6 +201,7 @@ function getHandles(angle: number, cx: number): { sourceHandle: string; targetHa
 function buildLayout(
   providers: ProviderEntry[],
   activeSet: Set<string>,
+  activeModels: Map<string, string>,
   lastSet: Set<string>,
   errorSet: Set<string>
 ): { nodes: Node[]; edges: Edge[] } {
@@ -216,9 +234,7 @@ function buildLayout(
       return 4;
     };
     const d = rank(a) - rank(b);
-    return d !== 0
-      ? d
-      : a.provider.toLowerCase().localeCompare(b.provider.toLowerCase()); // ASCII kasıtlı
+    return d !== 0 ? d : a.provider.toLowerCase().localeCompare(b.provider.toLowerCase()); // ASCII kasıtlı
   });
 
   let provIdx = 0;
@@ -256,9 +272,10 @@ function buildLayout(
         type: "provider",
         position: { x: cx - nodeW / 2, y: cy - nodeH / 2 },
         data: {
-          label: resolveTopologyNodeLabel(p.name, config.name, p.provider),
+          label: resolveTopologyNodeLabel(undefined, config.name, p.provider),
           color: config.color || "#6b7280",
           providerId: p.provider,
+          currentModel: activeModels.get(pid),
           active,
           error,
           healthy,
@@ -296,29 +313,27 @@ export default function ProviderTopology({
   errorProvider = "",
 }: Props) {
   const t = useTranslations("common");
-  const activeKey = useMemo(
-    () =>
-      activeRequests
-        .map((r) => r.provider?.toLowerCase())
-        .filter(Boolean)
-        .sort()
-        .join(","),
-    [activeRequests]
-  );
   const lastKey = lastProvider.toLowerCase();
   const errorKey = errorProvider.toLowerCase();
 
-  const activeSet = useMemo(
-    () => new Set<string>(activeKey ? activeKey.split(",") : []),
-    [activeKey]
-  );
+  const activeModels = useMemo(() => {
+    const models = new Map<string, string>();
+    for (const request of activeRequests) {
+      const provider = request.provider?.toLowerCase();
+      if (provider && request.model && !models.has(provider)) {
+        models.set(provider, request.model);
+      }
+    }
+    return models;
+  }, [activeRequests]);
+  const activeSet = useMemo(() => new Set(activeModels.keys()), [activeModels]);
   const lastSet = useMemo(() => new Set<string>(lastKey ? [lastKey] : []), [lastKey]);
   const errorSet = useMemo(() => new Set<string>(errorKey ? [errorKey] : []), [errorKey]);
 
   const { nodes, edges } = useMemo(
-    () => buildLayout(providers, activeSet, lastSet, errorSet),
+    () => buildLayout(providers, activeSet, activeModels, lastSet, errorSet),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [providers, activeSet, lastKey, errorKey]
+    [providers, activeSet, activeModels, lastKey, errorKey]
   );
 
   const providersKey = useMemo(

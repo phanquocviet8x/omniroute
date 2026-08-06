@@ -39,7 +39,22 @@ test("ProviderTopology treats live activeRequests as the current snapshot withou
 
   assert.match(
     providerTopologySrc,
-    /const activeSet = useMemo\(\s*\(\) => new Set<string>\(activeKey \? activeKey\.split\(","\) : \[\]\),\s*\[activeKey\]\s*\);/,
-    "activeSet should be derived directly from activeRequests/current live snapshot"
+    /const activeModels = useMemo\(\(\) => \{/,
+    "active provider/model state should be derived from the live request snapshot"
+  );
+  assert.match(
+    providerTopologySrc,
+    /currentModel: activeModels\.get\(pid\)/,
+    "each provider node should receive only its current live model"
+  );
+  assert.match(
+    providerTopologySrc,
+    /animate-spin/,
+    "active providers should render a rotating light ring"
+  );
+  assert.match(
+    providerTopologySrc,
+    /resolveTopologyNodeLabel\(undefined, config\.name, p\.provider\)/,
+    "node labels must use the provider identity, not connection/model names"
   );
 });

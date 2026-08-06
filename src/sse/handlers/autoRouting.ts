@@ -17,15 +17,38 @@ import * as log from "../utils/logger";
 export type AutoRoutingState = {
   model: string;
   variant?: AutoVariant;
-  spec?: { category?: AutoCategory; tier?: AutoTier; policy?: AutoRoutingPolicy };
+  spec?: {
+    category?: AutoCategory;
+    tier?: AutoTier;
+    policy?: AutoRoutingPolicy;
+    providerScope?: string;
+  };
   isAutoRouting: boolean;
   recognizedBuiltInAuto: boolean;
   response: Response | null;
 };
 
+const SAFE_PROVIDER_SCOPE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+export function parseProviderScopedAutoModel(model: string): { providerScope: string } | null {
+  const prefix = "auto/provider/";
+  if (!model.startsWith(prefix)) return null;
+  const providerScope = model.slice(prefix.length);
+  if (!SAFE_PROVIDER_SCOPE_RE.test(providerScope)) return null;
+  return { providerScope };
+}
+
 function classifyAutoModel(
   model: string
 ): Pick<AutoRoutingState, "variant" | "spec" | "recognizedBuiltInAuto"> {
+  const providerScoped = parseProviderScopedAutoModel(model);
+  if (providerScoped) {
+    return {
+      recognizedBuiltInAuto: true,
+      spec: providerScoped,
+    };
+  }
+
   const recognizedBuiltInAuto =
     model === "auto" || Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, model);
   if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, model)) {

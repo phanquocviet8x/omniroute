@@ -34,6 +34,8 @@ export interface AutoComboSpec {
   tier?: AutoTier;
   family?: ModelFamily;
   policy?: AutoRoutingPolicy;
+  /** Hard provider constraint for `auto/provider/<provider>` routes. */
+  providerScope?: string;
 }
 
 /** Minimal connection shape needed for virtual auto-combo factory */
@@ -519,10 +521,24 @@ export async function createVirtualAutoCombo(
     }
   }
 
-  // SulaShop `auto/codex`: hard Codex-only channel. Reuse the existing
-  // candidate/account machinery (allowedConnectionIds, per-account exclusions,
-  // and quota preflight in combo routing), but never fall back to non-Codex
-  // providers the way `auto/bestcodex` can.
+  // SulaShop provider-scoped channels are hard identity constraints. Reuse the
+  // existing candidate/account machinery (allowedConnectionIds, per-account
+  // exclusions and quota preflight), but never escape to another provider.
+  const providerScope = spec?.providerScope?.trim();
+  if (providerScope) {
+    const scopedPool = effectivePool.filter((candidate) => candidate.provider === providerScope);
+    if (scopedPool.length > 0) {
+      effectivePool = scopedPool;
+    } else {
+      log.warn(
+        "AUTO",
+        `auto/provider/${providerScope} matched no connected candidates; returning an empty pool`
+      );
+      effectivePool = [];
+    }
+  }
+
+  // Backward-compatible hard Codex-only channel.
   if (spec?.policy === "codex-only") {
     const codexPool = effectivePool.filter((candidate) => candidate.provider === "codex");
     if (codexPool.length > 0) {
