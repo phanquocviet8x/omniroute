@@ -24,10 +24,8 @@ test("parses only safe auto/provider/<provider> routes", () => {
 });
 
 test("provider-scoped factory is a hard candidate-pool constraint", () => {
-  assert.match(
-    factorySource,
-    /effectivePool\.filter\(\(candidate\) => candidate\.provider === providerScope\)/
-  );
+  assert.match(factorySource, /resolveProviderScopeIds\(/);
+  assert.match(factorySource, /providerScopeIds\.has\(candidate\.provider\)/);
   assert.match(
     factorySource,
     /auto\/provider\/\$\{providerScope\} matched no connected candidates; returning an empty pool/

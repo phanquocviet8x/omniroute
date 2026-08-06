@@ -1,7 +1,7 @@
 import { AutoComboConfig } from "./engine";
 import { MODE_PACKS } from "./modePacks";
 import { DEFAULT_WEIGHTS, ScoringWeights } from "./scoring";
-import { getCachedProviderConnections } from "@/lib/db/readCache";
+import { getCachedProviderConnections, getCachedProviderNodes } from "@/lib/db/readCache";
 import { getSettings } from "@/lib/db/settings";
 import { getProviderRegistry } from "./providerRegistryAccessor";
 import type { ConnectionFields } from "@/lib/db/encryption";
@@ -25,6 +25,7 @@ export type AutoRoutingPolicy = "free-first-paid-fallback" | "codex-paid-free" |
 import { isModelExcludedByConnection } from "@/domain/connectionModelRules";
 import { filterExcludedCandidates } from "./candidateOverrides";
 import { getExcludedConnectionIds } from "@/lib/db/autoCandidateOverrides";
+import { resolveProviderScopeIds, type ProviderScopeNode } from "./providerScope";
 
 /** #4235 Phase B: optional category/tier overlay for `auto/<category>:<tier>` combos.
  * #6453: optional `family` overlay for `auto/<family>` combos (e.g. `auto/glm`) —
@@ -317,7 +318,7 @@ export async function createVirtualAutoCombo(
   apiKeyId?: string,
   autoChannel?: string
 ): Promise<VirtualAutoCombo> {
-  const [connections, disabledNoAuthConnections, settings] = await Promise.all([
+  const [connections, disabledNoAuthConnections, settings, providerNodes] = await Promise.all([
     getCachedProviderConnections({ isActive: true }) as Promise<VirtualFactoryConn[]>,
     // #6557: no-auth providers (opencode/mimocode/etc.) don't get an isActive
     // filter applied above since their credential is synthetic, but a real
@@ -325,6 +326,7 @@ export async function createVirtualAutoCombo(
     // and its own isActive=false must gate the auto-combo pool too — not just
     getCachedProviderConnections({ isActive: false }) as Promise<VirtualFactoryConn[]>,
     getSettings().catch(() => ({}) as Record<string, unknown>),
+    getCachedProviderNodes().catch(() => [] as unknown[]),
   ]);
   const blockedProviders = new Set(
     Array.isArray(settings.blockedProviders) ? (settings.blockedProviders as string[]) : []
@@ -526,7 +528,13 @@ export async function createVirtualAutoCombo(
   // exclusions and quota preflight), but never escape to another provider.
   const providerScope = spec?.providerScope?.trim();
   if (providerScope) {
-    const scopedPool = effectivePool.filter((candidate) => candidate.provider === providerScope);
+    const providerScopeIds = resolveProviderScopeIds(
+      providerScope,
+      providerNodes as ProviderScopeNode[]
+    );
+    const scopedPool = effectivePool.filter((candidate) =>
+      providerScopeIds.has(candidate.provider)
+    );
     if (scopedPool.length > 0) {
       effectivePool = scopedPool;
     } else {
