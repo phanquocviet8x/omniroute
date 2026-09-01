@@ -26,6 +26,7 @@ import { isModelExcludedByConnection } from "@/domain/connectionModelRules";
 import { filterExcludedCandidates } from "./candidateOverrides";
 import { getExcludedConnectionIds } from "@/lib/db/autoCandidateOverrides";
 import { resolveProviderScopeIds, type ProviderScopeNode } from "./providerScope";
+import { getSyncedAvailableModelsByConnection } from "@/lib/db/models";
 
 /** #4235 Phase B: optional category/tier overlay for `auto/<category>:<tier>` combos.
  * #6453: optional `family` overlay for `auto/<family>` combos (e.g. `auto/glm`) —
@@ -532,9 +533,63 @@ export async function createVirtualAutoCombo(
       providerScope,
       providerNodes as ProviderScopeNode[]
     );
-    const scopedPool = effectivePool.filter((candidate) =>
-      providerScopeIds.has(candidate.provider)
-    );
+    let scopedPool = effectivePool.filter((candidate) => providerScopeIds.has(candidate.provider));
+    // Passthrough/compatible providers (e.g. `bai`) keep an empty static
+    // registry model list; their routable catalog lives only in the
+    // per-connection synced model store (DB key_value syncedAvailableModels).
+    // Without this, `auto/provider/<scope>` materializes 0 candidates and
+    // every request fails before any dispatch, while fixed
+    // `<provider>/<model>` routes still work. Union the synced lists per
+    // connection, keeping each model's candidate scoped to the connections
+    // that actually list it (allowedConnectionIds), and skip models the
+    // operator excluded on that connection.
+    if (scopedPool.length === 0) {
+      for (const [providerId, providerConnections] of connectionsByProvider) {
+        if (!providerScopeIds.has(providerId)) continue;
+        for (const conn of providerConnections) {
+          let syncedModels: Awaited<
+            ReturnType<typeof getSyncedAvailableModelsByConnection>
+          >[string] = [];
+          try {
+            syncedModels = (await getSyncedAvailableModelsByConnection(providerId))[conn.id] ?? [];
+          } catch (err) {
+            log.warn(
+              "AUTO",
+              `auto/provider/${providerScope}: failed to load synced models for ${providerId}:${conn.id}`,
+              { err }
+            );
+          }
+          for (const syncedModel of syncedModels) {
+            const modelId = typeof syncedModel?.id === "string" ? syncedModel.id.trim() : "";
+            if (!modelId) continue;
+            if (isModelExcludedByConnection(modelId, conn.providerSpecificData)) continue;
+            const existing = scopedPool.find(
+              (candidate) => candidate.provider === providerId && candidate.model === modelId
+            );
+            if (existing) {
+              if (!existing.allowedConnectionIds.includes(conn.id)) {
+                existing.allowedConnectionIds.push(conn.id);
+              }
+              continue;
+            }
+            scopedPool.push({
+              provider: providerId,
+              connectionId: null,
+              allowedConnectionIds: [conn.id],
+              model: modelId,
+              modelStr: `${providerId}/${modelId}`,
+              costPer1MTokens: 0,
+            });
+          }
+        }
+      }
+      if (scopedPool.length > 0) {
+        log.info(
+          "AUTO",
+          `auto/provider/${providerScope}: registry pool empty; restored ${scopedPool.length} candidate(s) from synced connection models`
+        );
+      }
+    }
     if (scopedPool.length > 0) {
       effectivePool = scopedPool;
     } else {
