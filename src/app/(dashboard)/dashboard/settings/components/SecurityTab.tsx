@@ -7,6 +7,7 @@ import ProviderIcon from "@/shared/components/ProviderIcon";
 import IPFilterSection from "./IPFilterSection";
 import SessionInfoCard from "./SessionInfoCard";
 import AuthzSection from "./AuthzSection";
+import TwoFactorSection from "./TwoFactorSection";
 import { useTranslations } from "next-intl";
 
 export default function SecurityTab() {
@@ -285,6 +286,8 @@ export default function SecurityTab() {
       </Card>
 
       <IPFilterSection />
+
+      <TwoFactorSection />
 
       {/* API Endpoint Protection */}
       <Card>

@@ -3,6 +3,7 @@ import { getSettings, updateSettings } from "@/lib/localDb";
 import { getRuntimePorts } from "@/lib/runtime/ports";
 import { updateSettingsSchema } from "@/shared/validation/settingsSchemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import { TWO_FACTOR_PRIVATE_SETTING_KEYS } from "@/lib/auth/twoFactor";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { resolveModelLockoutSettings } from "@/lib/resilience/modelLockoutSettings";
 import {
@@ -162,6 +163,11 @@ export async function GET(request: Request) {
   try {
     const settings = await getSettings();
     const { password, ...safeSettings } = settings;
+    // TOTP secret + recovery-code hashes must never leave the server (same
+    // class as the password itself). The enabled flag stays visible.
+    for (const key of TWO_FACTOR_PRIVATE_SETTING_KEYS) {
+      delete safeSettings[key];
+    }
 
     const runtimePorts = getRuntimePorts();
     const cloudUrl = process.env.CLOUD_URL || process.env.NEXT_PUBLIC_CLOUD_URL || null;

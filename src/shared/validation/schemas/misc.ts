@@ -40,6 +40,26 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Password is required").max(200),
 });
 
+// ──── Two-factor authentication (TOTP) schemas ────
+
+/** POST /api/auth/2fa/setup — re-authenticate with the management password. */
+export const twoFactorSetupSchema = z.object({
+  password: z.string().min(1, "Password is required").max(200),
+});
+
+/** POST /api/auth/2fa/enable + /api/auth/2fa/disable — password re-auth + code. */
+export const twoFactorManageSchema = z.object({
+  password: z.string().min(1, "Password is required").max(200),
+  // TOTP (6 digits) or a recovery code (`ABCDE-FGHJK`).
+  code: z.string().min(6, "Authentication code is required").max(32),
+});
+
+/** POST /api/auth/2fa/verify — pending login token + code. */
+export const twoFactorVerifySchema = z.object({
+  token: z.string().min(20, "Challenge token is required").max(4096),
+  code: z.string().min(6, "Authentication code is required").max(32),
+});
+
 export const dbBackupCleanupSchema = z.object({
   keepLatest: z.number().int().min(1).max(200).optional(),
   retentionDays: z.number().int().min(0).max(3650).optional(),

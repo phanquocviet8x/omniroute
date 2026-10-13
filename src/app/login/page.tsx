@@ -11,6 +11,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Pending 2FA login: set after the password step returns `requires2FA`.
+  // While set, the login card shows the TOTP code step instead of the password form.
+  const [twoFactorToken, setTwoFactorToken] = useState(null);
+  const [totpCode, setTotpCode] = useState("");
   const [hasPassword, setHasPassword] = useState(null);
   const [setupComplete, setSetupComplete] = useState(null);
   const [oidcEnabled, setOidcEnabled] = useState<boolean | null>(null);
@@ -72,6 +76,14 @@ export default function LoginPage() {
       });
 
       if (res.ok) {
+        const data = await res.json();
+        // Second factor enabled: the server deliberately did NOT mint a
+        // session cookie — show the TOTP step and complete login there.
+        if (data.requires2FA && data.token) {
+          setTwoFactorToken(data.token);
+          setError("");
+          return;
+        }
         sessionStorage.setItem("omniroute_login_time", String(Date.now()));
         router.push("/dashboard");
         router.refresh();
@@ -83,6 +95,42 @@ export default function LoginPage() {
           return;
         }
         setError(data.error || t("invalidPassword"));
+      }
+    } catch (err) {
+      setError(t("errorOccurredRetry"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTwoFactorVerify = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/auth/2fa/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: twoFactorToken, code: totpCode.trim() }),
+      });
+
+      if (res.ok) {
+        sessionStorage.setItem("omniroute_login_time", String(Date.now()));
+        router.push("/dashboard");
+        router.refresh();
+      } else {
+        const data = await res.json();
+        const message =
+          typeof data?.error === "string"
+            ? data.error
+            : data?.error?.message || t("invalidPassword");
+        setError(message);
+        // The pending token expires after 5 minutes — force a clean restart.
+        if (res.status === 401 && /log in again|expired/i.test(message)) {
+          setTwoFactorToken(null);
+          setTotpCode("");
+        }
       }
     } catch (err) {
       setError(t("errorOccurredRetry"));
@@ -238,7 +286,7 @@ export default function LoginPage() {
               <p className="text-text-muted mt-1.5">{t("enterPassword")}</p>
             </div>
 
-            <form onSubmit={handleLogin} className="space-y-5">
+            <form onSubmit={handleLogin} className="space-y-5" hidden={Boolean(twoFactorToken)}>
               <div className="space-y-2">
                 <label className="text-sm font-medium text-text-main">{t("password")}</label>
                 <Input
@@ -268,6 +316,56 @@ export default function LoginPage() {
                 {t("continue")}
               </Button>
             </form>
+
+            {twoFactorToken && (
+              <form onSubmit={handleTwoFactorVerify} className="space-y-5">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-text-main">
+                    Two-factor authentication
+                  </label>
+                  <Input
+                    type="text"
+                    placeholder="123456 or ABCDE-FGHJK"
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value)}
+                    required
+                    autoFocus
+                    autoComplete="one-time-code"
+                    className="h-11 font-mono tracking-widest"
+                  />
+                  {error && (
+                    <p className="text-sm text-red-500 flex items-center gap-1.5 pt-1">
+                      <span className="material-symbols-outlined text-base">error</span>
+                      {error}
+                    </p>
+                  )}
+                  <p className="text-xs text-text-muted/60 pt-0.5">
+                    Enter the 6-digit code from your authenticator app, or one of your recovery
+                    codes.
+                  </p>
+                </div>
+
+                <Button
+                  type="submit"
+                  variant="primary"
+                  className="w-full h-11 text-sm font-medium"
+                  loading={loading}
+                >
+                  Verify
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTwoFactorToken(null);
+                    setTotpCode("");
+                    setError("");
+                  }}
+                  className="text-sm text-text-muted hover:text-primary transition-colors"
+                >
+                  Back to password
+                </button>
+              </form>
+            )}
             {oidcEnabled && (
               <div className="mt-4">
                 <Button

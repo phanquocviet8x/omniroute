@@ -9,6 +9,7 @@ import {
   verifyManagementPassword,
 } from "@/lib/auth/managementPassword";
 import { loginSchema } from "@/shared/validation/schemas";
+import { getTwoFactorState, signPendingTwoFactorToken } from "@/lib/auth/twoFactor";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { checkLoginGuard, clearLoginAttempts, recordLoginFailure } from "@/server/auth/loginGuard";
 
@@ -125,6 +126,27 @@ export async function POST(request) {
     const isValid = await verifyManagementPassword(password, storedHash);
 
     if (isValid) {
+      // Dashboard 2FA: a correct password alone must NOT mint a session when
+      // the second factor is enabled. Hand back a short-lived pending token
+      // (signed with a JWT_SECRET-derived key, so it can never authenticate a
+      // management route) and let POST /api/auth/2fa/verify complete login.
+      const twoFactorState = await getTwoFactorState();
+      if (twoFactorState.enabled) {
+        const pendingToken = await signPendingTwoFactorToken();
+        logAuditEvent({
+          action: "auth.login.2fa_challenge",
+          actor: "anonymous",
+          target: "dashboard-auth",
+          resourceType: "auth_session",
+          status: "success",
+          ipAddress: auditContext.ipAddress || undefined,
+          requestId: auditContext.requestId,
+          metadata: {},
+        });
+        clearLoginAttempts(clientIp);
+        return NextResponse.json({ requires2FA: true, token: pendingToken });
+      }
+
       const forceSecureCookie = process.env.AUTH_COOKIE_SECURE === "true";
       const forwardedProtoHeader = request.headers.get("x-forwarded-proto") || "";
       const forwardedProto = forwardedProtoHeader.split(",")[0].trim().toLowerCase();

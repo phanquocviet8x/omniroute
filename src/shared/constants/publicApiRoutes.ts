@@ -2,6 +2,10 @@ const PUBLIC_API_ROUTE_PREFIXES = [
   "/api/auth/login",
   "/api/auth/logout",
   "/api/auth/status",
+  // Pending-2FA completion: no session exists yet. The handler enforces its own
+  // pending-token check (HMAC-derived key) + brute-force guard before minting
+  // the session cookie. setup/enable/disable/status stay management-gated.
+  "/api/auth/2fa/verify",
   "/api/auth/oidc/",
   "/api/init",
   "/api/v1/",
