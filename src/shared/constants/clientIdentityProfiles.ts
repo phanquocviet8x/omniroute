@@ -15,6 +15,8 @@
  */
 
 import { getClaudeCodeUserAgent } from "./claudeCodeClient";
+import { getCodexCliRsHeaders } from "./codexClient";
+import { getGeminiCliUserAgent } from "./geminiCliClient";
 
 export interface ClientIdentityProfile {
   readonly id: string;
@@ -40,17 +42,21 @@ const CLAUDE_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
 const CODEX_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
   id: "codex-cli",
   label: "Codex CLI",
-  headers: Object.freeze({
-    "User-Agent": "codex_cli_rs/0.144.1",
-    originator: "codex_cli_rs",
-  }),
+  headers: Object.freeze(getCodexCliRsHeaders()),
 });
 
 const GEMINI_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
   id: "gemini-cli",
   label: "Gemini CLI",
   headers: Object.freeze({
-    "User-Agent": "GeminiCLI/0.1.0 (linux; x64)",
+    "User-Agent": getGeminiCliUserAgent(),
+  }),
+});
+const MUSE_CLI_PROFILE: ClientIdentityProfile = Object.freeze({
+  id: "muse-cli",
+  label: "Muse Code CLI",
+  headers: Object.freeze({
+    "User-Agent": "MuseCodeCLI/0.1.0 (linux; x64)",
   }),
 });
 
@@ -61,6 +67,7 @@ export const CLIENT_IDENTITY_PROFILES: Readonly<Record<string, ClientIdentityPro
     "claude-cli": CLAUDE_CLI_PROFILE,
     "codex-cli": CODEX_CLI_PROFILE,
     "gemini-cli": GEMINI_CLI_PROFILE,
+    "muse-cli": MUSE_CLI_PROFILE,
   });
 
 export const CLIENT_IDENTITY_PROFILE_IDS: readonly string[] = Object.keys(CLIENT_IDENTITY_PROFILES);

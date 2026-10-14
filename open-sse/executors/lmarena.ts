@@ -2,15 +2,17 @@
  * LMArenaExecutor — Arena (formerly LMArena) web-session provider.
  *
  * Routes requests through arena.ai create-evaluation with session cookies.
- * Upstream sits behind Cloudflare; traffic goes through tls-client-node Chrome
- * impersonation (see services/lmarenaTlsClient.ts).
+ * Upstream sits behind Cloudflare; traffic goes through wreq-js Chrome
+ * impersonation with isolated ephemeral cookies (see services/lmarenaTlsClient.ts).
  *
  * Helpers: open-sse/executors/lmarena/{cookie,models,stream,response}.ts
  */
 import { v7 as uuidv7 } from "uuid";
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { tlsFetchLMArena, TlsClientUnavailableError } from "../services/lmarenaTlsClient.ts";
+import { currentAppliedProxySink } from "../utils/proxyFetch.ts";
 import { readLMArenaCookie, reconstructLMArenaCookie } from "./lmarena/cookie.ts";
+import { sanitizeLMArenaError } from "./lmarena/error.ts";
 import {
   LMARENA_STREAM_URL,
   LMARENA_USER_AGENT,
@@ -50,6 +52,15 @@ interface OpenAIMessage {
   content?: unknown;
 }
 
+function isTlsClientUnavailableError(error: unknown): error is TlsClientUnavailableError {
+  try {
+    return error instanceof TlsClientUnavailableError;
+  } catch {
+    // A rejected Proxy may throw while instanceof walks its prototype chain.
+    return false;
+  }
+}
+
 /** Optional browser-issued reCAPTCHA v3 token (operator-supplied). */
 function readRecaptchaToken(credentials: unknown, body: unknown): string | null {
   const fromObj = (v: unknown): string | null => {
@@ -66,6 +77,12 @@ function readRecaptchaToken(credentials: unknown, body: unknown): string | null 
     return null;
   };
   return fromObj(credentials) ?? fromObj(body);
+}
+
+// Publish the received status so proxy health counts it as upstream.
+function recordLMArenaUpstreamStatus(status: number): void {
+  const sink = currentAppliedProxySink();
+  if (sink && status >= 400) sink.upstreamStatus = status;
 }
 
 export class LMArenaExecutor extends BaseExecutor {
@@ -146,13 +163,13 @@ export class LMArenaExecutor extends BaseExecutor {
         log,
       });
     } catch (error) {
-      if (error instanceof TlsClientUnavailableError) {
-        log?.error?.("LMArenaExecutor", `TLS client unavailable: ${error.message}`);
-        return mapTlsUnavailable(error, url, headers, transformedBody);
+      if (isTlsClientUnavailableError(error)) {
+        log?.error?.("LMArenaExecutor", `TLS client unavailable: ${sanitizeLMArenaError(error)}`);
+        return mapTlsUnavailable(url, headers, transformedBody);
       }
-      const message = error instanceof Error ? error.message : String(error);
-      log?.error?.("LMArenaExecutor", `Request failed: ${message}`);
-      return mapNetworkError(message, url, headers, transformedBody);
+      const logMessage = sanitizeLMArenaError(error);
+      log?.error?.("LMArenaExecutor", `Request failed: ${logMessage}`);
+      return mapNetworkError(url, headers, transformedBody);
     }
   }
 
@@ -174,8 +191,8 @@ export class LMArenaExecutor extends BaseExecutor {
       body: JSON.stringify(transformedBody),
       signal: ctx.signal,
       stream: ctx.stream,
-      streamEofSymbol: "__OMNIROUTE_LMARENA_EOF_NEVER__",
     });
+    recordLMArenaUpstreamStatus(tlsResult.status);
 
     const failed = mapFailedTlsResult({
       status: tlsResult.status,

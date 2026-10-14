@@ -41,6 +41,108 @@ test("parseKiroModels reads CodeWhisperer ListAvailableModels shape", () => {
   assert.equal(models[0].owned_by, "kiro");
 });
 
+test("parseKiroModels preserves live prompt-caching capability metadata", () => {
+  const [model] = parseKiroModels({
+    models: [
+      {
+        modelId: "claude-sonnet-4.5",
+        modelName: "Claude Sonnet 4.5",
+        promptCaching: {
+          supportsPromptCaching: true,
+          minimumTokensPerCacheCheckpoint: 1024,
+          maximumCacheCheckpointsPerRequest: 4,
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(model.promptCaching, {
+    supportsPromptCaching: true,
+    minimumTokensPerCacheCheckpoint: 1024,
+    maximumCacheCheckpointsPerRequest: 4,
+  });
+});
+
+test("parseKiroModels keeps nonnumeric prompt-caching limits unknown", () => {
+  const [model] = parseKiroModels({
+    models: [
+      {
+        modelId: "claude-sonnet-4.5",
+        promptCaching: {
+          supportsPromptCaching: true,
+          minimumTokensPerCacheCheckpoint: null,
+          maximumCacheCheckpointsPerRequest: false,
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(model.promptCaching, {
+    supportsPromptCaching: true,
+    minimumTokensPerCacheCheckpoint: null,
+    maximumCacheCheckpointsPerRequest: null,
+  });
+});
+
+test("fetchKiroAvailableModels carries upstream prompt-caching metadata to model variants", async () => {
+  const fetchImpl = (async () =>
+    jsonResponse({
+      models: [
+        {
+          modelId: "claude-sonnet-4.5",
+          promptCaching: {
+            supportsPromptCaching: true,
+            minimumTokensPerCacheCheckpoint: 1024,
+            maximumCacheCheckpointsPerRequest: 4,
+          },
+        },
+      ],
+    })) as unknown as typeof fetch;
+
+  const result = await fetchKiroAvailableModels({
+    accessToken: "tok",
+    providerSpecificData: {},
+    fetchImpl,
+    fallbackModels: FALLBACK,
+  });
+
+  assert.ok(result.models.length >= 1);
+  for (const model of result.models) {
+    assert.equal(model.upstreamModelId, "claude-sonnet-4.5");
+    assert.deepEqual(model.promptCaching, {
+      supportsPromptCaching: true,
+      minimumTokensPerCacheCheckpoint: 1024,
+      maximumCacheCheckpointsPerRequest: 4,
+    });
+  }
+});
+
+test("fetchKiroAvailableModels does not invent a context window when tokenLimits is missing", async () => {
+  // A stamped 200k default would reach syncedAvailableModels as inputTokenLimit and get
+  // pinned as an auto:discovery override over the registry / models.dev window
+  // (claude-sonnet-5 is 1M) — the same bug class as grok-cli's old 256k fallback.
+  const fetchImpl = (async () =>
+    jsonResponse({
+      models: [
+        { modelId: "claude-sonnet-5" },
+        { modelId: "claude-sonnet-4.6", tokenLimits: { maxInputTokens: 200000 } },
+      ],
+    })) as unknown as typeof fetch;
+
+  const result = await fetchKiroAvailableModels({
+    accessToken: "tok",
+    providerSpecificData: {},
+    fetchImpl,
+    fallbackModels: FALLBACK,
+  });
+
+  const omitted = result.models.filter((m) => m.upstreamModelId === "claude-sonnet-5");
+  const declared = result.models.filter((m) => m.upstreamModelId === "claude-sonnet-4.6");
+  assert.ok(omitted.length >= 1 && declared.length >= 1);
+  for (const model of omitted) assert.equal("contextLength" in model, false);
+  for (const model of declared) assert.equal(model.contextLength, 200000);
+});
+
 test("resolveKiroRegion prefers stored region, then profileArn, else us-east-1", () => {
   assert.equal(resolveKiroRegion({ region: "eu-central-1" }), "eu-central-1");
   assert.equal(

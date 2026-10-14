@@ -12,7 +12,10 @@ import {
   isAlibabaRegionalProvider,
   normalizeAlibabaProviderRegion,
   resolveAlibabaProviderBaseUrl,
+  resolveAlibabaProviderEmbeddingUrl,
+  resolveAlibabaProviderMediaBaseUrl,
   resolveAlibabaProviderModelsUrl,
+  resolveAlibabaQwen3RerankUrl,
 } from "../../src/shared/constants/alibabaProviderRegions.ts";
 import { APIKEY_PROVIDERS } from "../../src/shared/constants/providers.ts";
 
@@ -23,8 +26,8 @@ test("Alibaba-family endpoint matrix keeps product and region boundaries distinc
       "china-beijing": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     },
     "bailian-coding-plan": {
-      "global-sg": "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1",
-      "china-beijing": "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1",
+      "global-sg": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic/v1",
+      "china-beijing": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1",
     },
     "qwen-cloud": {
       "global-sg": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -77,6 +80,37 @@ test("regional resolver normalizes old region names and preserves genuine custom
   );
 });
 
+test("#13030 Alibaba specialty endpoints follow the selected workspace connection", () => {
+  const workspace = {
+    region: "china-beijing",
+    baseUrl: "https://workspace-test.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  };
+  assert.equal(
+    resolveAlibabaProviderEmbeddingUrl("alibaba", workspace),
+    "https://workspace-test.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings"
+  );
+  assert.equal(
+    resolveAlibabaQwen3RerankUrl("alibaba", workspace),
+    "https://workspace-test.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks"
+  );
+  assert.equal(
+    resolveAlibabaQwen3RerankUrl("alibaba-cn"),
+    "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
+  );
+  assert.equal(
+    resolveAlibabaProviderEmbeddingUrl("alibaba", {
+      baseUrl: "https://workspace-test.ap-southeast-1.maas.aliyuncs.com",
+    }),
+    "https://workspace-test.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/embeddings"
+  );
+  assert.equal(
+    resolveAlibabaQwen3RerankUrl("alibaba", {
+      baseUrl: "https://workspace-test.ap-southeast-1.maas.aliyuncs.com/compatible-api/v1/reranks",
+    }),
+    "https://workspace-test.ap-southeast-1.maas.aliyuncs.com/compatible-api/v1/reranks"
+  );
+});
+
 test("DefaultExecutor applies the regional endpoint to normal requests", () => {
   const alibaba = new DefaultExecutor("alibaba");
   assert.equal(
@@ -91,7 +125,7 @@ test("DefaultExecutor applies the regional endpoint to normal requests", () => {
     codingPlan.buildUrl("qwen3.7-plus", true, 0, {
       providerSpecificData: { region: "china-beijing" },
     }),
-    "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages"
+    "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1/messages"
   );
 
   const qwenCloud = new DefaultExecutor("qwen-cloud");
@@ -132,7 +166,11 @@ test("provider validation probes the selected Coding Plan region", async () => {
       },
     });
     assert.equal(result.valid, true);
-    assert.deepEqual(urls, ["https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages"]);
+    // The stored URL is a RETIRED preset, so it must not pin the connection: the
+    // china-beijing selector still wins and routes to the Token Plan CN host.
+    assert.deepEqual(urls, [
+      "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1/messages",
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -203,6 +241,7 @@ test("Qwen Cloud is a first-class metered API-key provider", () => {
   assert.deepEqual(
     REGISTRY["qwen-cloud"].models.map((model) => model.id),
     [
+      "qwen3.8-max",
       "qwen3.7-max-2026-06-08",
       "qwen3.7-plus",
       "qwen3.6-plus",
@@ -222,6 +261,7 @@ test("Qwen Cloud is a first-class metered API-key provider", () => {
 
 test("Alibaba Model Studio exposes the curated modern text catalog", () => {
   const expectedModels = [
+    "qwen3.8-max",
     "qwen3.7-max",
     "qwen3.7-plus",
     "qwen3.6-plus",
@@ -270,20 +310,24 @@ test("Qwen Cloud Token Plan remains a flat-rate provider with chat models only",
   assert.equal(isFlatRateProvider("qwen-cloud-token-plan"), true);
 
   const modelIds = REGISTRY["qwen-cloud-token-plan"].models.map((model) => model.id);
+  // #14273 registered the qwen3.8-flash and deepseek-v4.1-flash vision chat leaves.
   assert.deepEqual(modelIds, [
-    "qwen3.8-max-preview",
+    "qwen3.8-max",
     "qwen3.7-max",
     "qwen3.7-plus",
+    "qwen3.8-flash",
     "qwen3.6-flash",
     "glm-5.2",
     "deepseek-v4-pro",
+    "deepseek-v4.1-flash",
+    "deepseek-v4-flash-0731",
   ]);
 
-  const preview = REGISTRY["qwen-cloud-token-plan"].models[0];
-  assert.equal(preview.supportsReasoning, true);
-  assert.equal(preview.supportsVision, true);
-  assert.equal(preview.contextLength, 1_000_000);
-  assert.equal(preview.maxOutputTokens, 65_536);
+  const qwen38 = REGISTRY["qwen-cloud-token-plan"].models[0];
+  assert.equal(qwen38.supportsReasoning, true);
+  assert.equal(qwen38.supportsVision, true);
+  assert.equal(qwen38.contextLength, 1_000_000);
+  assert.equal(qwen38.maxOutputTokens, 131_072);
 });
 
 test("dashboard folds legacy China connections into the unified Alibaba card", () => {
@@ -301,4 +345,59 @@ test("dashboard folds legacy China connections into the unified Alibaba card", (
   ]) {
     assert.equal(isAlibabaRegionalProvider(providerId), true);
   }
+});
+
+/**
+ * Regression guard for CodeQL `js/polynomial-redos` (alerts #765/#766).
+ *
+ * The trailing-slash trim used to be `/\/+$/`. That regex has no left anchor, so
+ * the engine retries the match at every start offset and each attempt walks the
+ * whole run of slashes before failing `$` — O(n^2) on a connection baseUrl made
+ * of many slashes. Measured on the vulnerable version: 10k slashes = 102ms,
+ * 30k = 968ms, 60k = 4028ms (clean quadratic). The linear strip runs in <1ms.
+ *
+ * `providerSpecificData.baseUrl` is operator-supplied config, so this input
+ * reaches the trim through isFamilyPresetUrl() -> normalizeEndpoint() and
+ * through both resolve*Url() helpers.
+ */
+test("trailing-slash normalization is linear on pathological slash runs (ReDoS guard)", () => {
+  const pathological = { baseUrl: `${"/".repeat(60_000)}x` };
+  const budgetMs = 500;
+
+  const started = performance.now();
+  resolveAlibabaProviderModelsUrl("alibaba", pathological);
+  resolveAlibabaProviderMediaBaseUrl("alibaba", pathological);
+  resolveAlibabaProviderBaseUrl("alibaba", pathological);
+  resolveAlibabaProviderEmbeddingUrl("alibaba", pathological);
+  resolveAlibabaQwen3RerankUrl("alibaba", pathological);
+  const elapsed = performance.now() - started;
+
+  assert.ok(
+    elapsed < budgetMs,
+    `trailing-slash trim must stay linear; took ${elapsed.toFixed(0)}ms (budget ${budgetMs}ms). ` +
+      "A quadratic trim (/\\/+$/) takes seconds on this input."
+  );
+});
+
+test("trailing-slash normalization keeps its exact behavior", () => {
+  // Every trailing slash is removed (not a bounded subset), and only trailing ones.
+  const withSlashes = { baseUrl: "https://example.test/v1////" };
+  assert.equal(
+    resolveAlibabaProviderModelsUrl("alibaba", withSlashes),
+    "https://example.test/v1/models"
+  );
+
+  // Interior slashes are preserved.
+  const interior = { baseUrl: "https://example.test//deep//path/" };
+  assert.equal(
+    resolveAlibabaProviderBaseUrl("alibaba", interior),
+    "https://example.test//deep//path/"
+  );
+  assert.equal(
+    resolveAlibabaProviderModelsUrl("alibaba", interior),
+    "https://example.test//deep//path/models"
+  );
+
+  // A string that is nothing but slashes collapses to empty.
+  assert.equal(resolveAlibabaProviderModelsUrl("alibaba", { baseUrl: "////" }), "");
 });

@@ -5,6 +5,15 @@ const { claudeToGeminiRequest } =
   await import("../../open-sse/translator/request/claude-to-gemini.ts");
 const { DEFAULT_SAFETY_SETTINGS } =
   await import("../../open-sse/translator/helpers/geminiHelper.ts");
+const {
+  buildGeminiThoughtSignatureKey,
+  storeGeminiThoughtSignature,
+  clearGeminiThoughtSignatures,
+} = await import("../../open-sse/services/geminiThoughtSignatureStore.ts");
+
+test.beforeEach(() => {
+  clearGeminiThoughtSignatures();
+});
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -34,6 +43,10 @@ function getFunctionResponse(part: unknown) {
 }
 
 test("Claude -> Gemini maps system, thinking, tool use, tool result and tools", () => {
+  // Native functionCall requires a cached thoughtSignature (#8979 / #3688).
+  const ns = "conn-claude-gemini-map";
+  storeGeminiThoughtSignature(buildGeminiThoughtSignatureKey(ns, "tu_1"), "SIG_MAP_WEATHER");
+
   const result = claudeToGeminiRequest(
     "gemini-2.5-pro",
     {
@@ -72,23 +85,30 @@ test("Claude -> Gemini maps system, thinking, tool use, tool result and tools", 
       top_p: 0.8,
       thinking: { type: "enabled", budget_tokens: 512 },
     },
-    false
+    false,
+    { _signatureNamespace: ns }
   );
 
   assert.deepEqual(result.systemInstruction, {
     role: "system",
     parts: [{ text: "Rules" }],
   });
-  assert.equal(result.contents[0].role, "model");
-  assert.deepEqual(result.contents[0].parts[0] as any, { thought: true, text: "need tool" });
-  assert.deepEqual(result.contents[0].parts[1] as any, {
+  // This fixture's messages start with an assistant tool_use and no leading
+  // user turn -- ensureHistoryDoesNotOpenWithFunctionCall (Gemini rejects a
+  // functionCall turn with nothing before it) prepends a synthetic user turn,
+  // shifting the mapped content this test cares about to index 1/2.
+  assert.equal(result.contents[0].role, "user");
+  assert.equal(result.contents[1].role, "model");
+  assert.deepEqual(result.contents[1].parts[0] as any, { thought: true, text: "need tool" });
+  assert.deepEqual(result.contents[1].parts[1] as any, {
+    thoughtSignature: "SIG_MAP_WEATHER",
     functionCall: { id: "tu_1", name: "weather", args: { city: "Tokyo" } },
   });
-  assert.deepEqual(result.contents[1].parts[0] as any, {
+  assert.deepEqual(result.contents[2].parts[0] as any, {
     functionResponse: {
       id: "tu_1",
       name: "weather",
-      response: { result: { result: "20C" } },
+      response: { result: "20C" },
     },
   });
   assert.equal(result.generationConfig.maxOutputTokens, 256);
@@ -162,7 +182,10 @@ test("Claude -> Gemini converts text and base64 images to Gemini parts", () => {
   ]);
 });
 
-test("Claude -> Gemini injects a fallback thoughtSignature on tool-call batches without thinking", () => {
+test("Claude -> Gemini omits unsigned functionCall instead of injecting a fake thoughtSignature (#8979)", () => {
+  // After #1410 / #8979: never inject a fake signature. Without a cached
+  // thoughtSignature, native functionCall parts are omitted (context mode)
+  // so Gemini 3+ does not return HTTP 400.
   const result = claudeToGeminiRequest(
     "gemini-2.5-flash",
     {
@@ -176,15 +199,30 @@ test("Claude -> Gemini injects a fallback thoughtSignature on tool-call batches 
     false
   );
 
-  assert.equal(result.contents.length, 1);
-  assert.equal(result.contents[0].role, "model");
-  assert.equal((result.contents[0].parts[0] as any).functionCall.name, "read_file");
-  assert.equal((result.contents[0].parts[0] as any).thoughtSignature, undefined);
+  assert.equal(result.contents.length, 0);
+  assert.equal(
+    JSON.stringify(result).includes('"functionCall"'),
+    false,
+    "signature-less tool_use must not become a native functionCall"
+  );
+  assert.equal(
+    JSON.stringify(result).includes('"thoughtSignature"'),
+    false,
+    "the translator must not synthesize a fake thought signature"
+  );
+  assert.equal(
+    JSON.stringify(result).includes("read_file"),
+    false,
+    "the omitted unsigned call must not leak its tool payload elsewhere"
+  );
 });
 
 test("Claude -> Gemini sanitizes long tool names and exposes a restore map", () => {
   const longToolName =
     "mcp__filesystem__read_multiple_files_with_validation_and_metadata_bundle_v2";
+  const ns = "conn-claude-gemini-long";
+  storeGeminiThoughtSignature(buildGeminiThoughtSignatureKey(ns, "tu_long_1"), "SIG_LONG_TOOL");
+
   const result = claudeToGeminiRequest(
     "gemini-2.5-pro",
     {
@@ -214,7 +252,8 @@ test("Claude -> Gemini sanitizes long tool names and exposes a restore map", () 
         },
       ],
     },
-    false
+    false,
+    { _signatureNamespace: ns }
   );
 
   const sanitizedToolName = (result as any).tools[0].functionDeclarations[0].name as string;
@@ -224,8 +263,11 @@ test("Claude -> Gemini sanitizes long tool names and exposes a restore map", () 
   assert.ok(longToolName.length > 64);
   assert.equal(sanitizedToolName.length, 64);
   assert.equal((result as any)._toolNameMap.get(sanitizedToolName), longToolName);
-  assert.equal(getFunctionCall(result.contents[0].parts[0] as any).name, sanitizedToolName);
-  assert.equal(getFunctionResponse(result.contents[1].parts[0] as any).name, sanitizedToolName);
+  // Same leading-user-turn shift as above: this fixture also opens on an
+  // assistant tool_use with no preceding user turn.
+  assert.equal(result.contents[0].role, "user");
+  assert.equal(getFunctionCall(result.contents[1].parts[0] as any).name, sanitizedToolName);
+  assert.equal(getFunctionResponse(result.contents[2].parts[0] as any).name, sanitizedToolName);
   assert.equal(parameters.examples, undefined);
   assert.equal(parameters.properties?.path?.["x-ui"], undefined);
 });
@@ -239,12 +281,18 @@ test("Claude -> Gemini handles empty bodies without producing invalid content", 
 });
 
 test("Claude -> Gemini maps output_config.effort to thinkingConfig when thinking absent", () => {
+  // NOTE: max/xhigh previously asserted 131072, but that locked in the OLD
+  // no-cap behavior — gemini-2.5-pro is unregistered, so the raw budget sailed
+  // to the upstream and 400'd ("thinking_budget must be in the range"). The
+  // gemini-substring fallback in capThinkingBudget now clamps unregistered
+  // Gemini models to the pro-tier ceiling 32768, which is what the upstream
+  // actually accepts. low/medium/high are below the cap and stay unchanged.
   const cases: Array<{ effort: string; expected: number }> = [
     { effort: "low", expected: 1024 },
     { effort: "medium", expected: 10240 },
     { effort: "high", expected: 32768 },
-    { effort: "max", expected: 131072 },
-    { effort: "xhigh", expected: 131072 },
+    { effort: "max", expected: 32768 },
+    { effort: "xhigh", expected: 32768 },
   ];
 
   for (const { effort, expected } of cases) {
@@ -437,4 +485,35 @@ test("Claude -> Gemini non-numeric budget_tokens falls through to effort path", 
     thinkingBudget: 1024,
     includeThoughts: true,
   });
+});
+
+test("Claude -> Gemini maps stop_sequences and stop to generationConfig.stopSequences", () => {
+  const result1 = claudeToGeminiRequest(
+    "gemini-2.5-pro",
+    {
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      stop_sequences: ["STOP", "\nHuman:"],
+    },
+    false
+  );
+  assert.deepEqual(result1.generationConfig.stopSequences, ["STOP", "\nHuman:"]);
+
+  const result2 = claudeToGeminiRequest(
+    "gemini-2.5-pro",
+    {
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      stop: "SINGLE_STOP",
+    },
+    false
+  );
+  assert.deepEqual(result2.generationConfig.stopSequences, ["SINGLE_STOP"]);
+
+  const result3 = claudeToGeminiRequest(
+    "gemini-2.5-pro",
+    {
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+    },
+    false
+  );
+  assert.strictEqual(result3.generationConfig.stopSequences, undefined);
 });

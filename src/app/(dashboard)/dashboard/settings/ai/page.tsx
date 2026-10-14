@@ -1,8 +1,9 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import ConnectionTestSettings from "../components/ConnectionTestSettings";
 import ThinkingBudgetTab from "../components/ThinkingBudgetTab";
-import VisionBridgeSettingsTab from "../components/VisionBridgeSettingsTab";
+import ModalityBridgeMovedCard from "../components/ModalityBridgeMovedCard";
 import SystemPromptTab from "../components/SystemPromptTab";
 import ResponsesStatePolicyTab from "../components/ResponsesStatePolicyTab";
 import CodexFastTierTab from "../components/CodexFastTierTab";
@@ -19,11 +20,12 @@ export default function SettingsAiPage() {
     <div className="space-y-6">
       <p className="text-sm text-text-muted">{t("aiSettingsIntro")}</p>
       <ThinkingBudgetTab />
-      <VisionBridgeSettingsTab />
+      <ModalityBridgeMovedCard />
       <SystemPromptTab />
       <ResponsesStatePolicyTab />
       <UsageTokenBufferTab />
       <CodexFastTierTab />
+      <ConnectionTestSettings />
       <CodexAutoPingTab />
       <ClaudeFastModeTab />
       <MemorySkillsTab />

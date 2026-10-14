@@ -8,6 +8,8 @@ type ProviderExecution = {
   url?: string;
   headers?: Headers | Record<string, string>;
   transformedBody?: unknown;
+  /** Internal-only upstream failure classification carried by the retried execution (#3229). */
+  upstreamDiagnostic?: Record<string, unknown>;
 };
 
 type ParsedError = {
@@ -69,7 +71,9 @@ export async function recoverAnthropicThinkingSignature(args: {
       return args.execute(requestBody);
     },
     getError: async (result) => {
-      if (result === firstFailure) return { status: result.status, message: result.message };
+      if (result === firstFailure) {
+        return { status: firstFailure.status, message: firstFailure.message };
+      }
       if (result.response.ok) return null;
       const details = await args.parseError(result.response.clone());
       return { status: details.statusCode, message: details.message };

@@ -3,13 +3,6 @@ import assert from "node:assert/strict";
 
 const runtimeTimeouts = await import("../../src/shared/utils/runtimeTimeouts.ts");
 
-test("default upstream timeout bounds stalled streams below ten minutes", () => {
-  const config = runtimeTimeouts.getUpstreamTimeoutConfig({});
-  assert.equal(config.fetchTimeoutMs, 300_000);
-  assert.equal(config.fetchBodyTimeoutMs, 300_000);
-  assert.equal(config.streamIdleTimeoutMs, 300_000);
-});
-
 test("upstream timeout config derives hidden fetch timeouts from FETCH_TIMEOUT_MS", () => {
   const config = runtimeTimeouts.getUpstreamTimeoutConfig({
     FETCH_TIMEOUT_MS: "600000",
@@ -19,9 +12,11 @@ test("upstream timeout config derives hidden fetch timeouts from FETCH_TIMEOUT_M
   assert.deepEqual(config, {
     fetchTimeoutMs: 600000,
     streamIdleTimeoutMs: 600000,
+    streamActiveTimeoutMs: 1260000,
     sseHeartbeatIntervalMs: 15000,
     streamReadinessTimeoutMs: 80000,
     streamReadinessMaxTimeoutMs: 180000,
+    streamDisconnectGracePeriodMs: 10000,
     fetchHeadersTimeoutMs: 600000,
     fetchBodyTimeoutMs: 600000,
     fetchConnectTimeoutMs: 30000,
@@ -110,9 +105,39 @@ test("API bridge timeouts align request timeout with long proxy timeout by defau
   });
 });
 
-test("idle timeout default bounds a stalled stream to five minutes", () => {
-  assert.equal(runtimeTimeouts.DEFAULT_STREAM_IDLE_TIMEOUT_MS, 300_000);
-  assert.equal(runtimeTimeouts.getUpstreamTimeoutConfig({}).streamIdleTimeoutMs, 300_000);
+test("active stream timeout is independent from REQUEST_TIMEOUT_MS and validates its own setting", () => {
+  assert.equal(runtimeTimeouts.DEFAULT_STREAM_ACTIVE_TIMEOUT_MS, 1_260_000);
+  assert.equal(runtimeTimeouts.getUpstreamTimeoutConfig({}).streamActiveTimeoutMs, 1_260_000);
+  assert.equal(
+    runtimeTimeouts.getUpstreamTimeoutConfig({ REQUEST_TIMEOUT_MS: "25000" }).streamActiveTimeoutMs,
+    1_260_000
+  );
+  assert.equal(
+    runtimeTimeouts.getUpstreamTimeoutConfig({ STREAM_ACTIVE_TIMEOUT_MS: "120000" })
+      .streamActiveTimeoutMs,
+    120_000
+  );
+  assert.equal(
+    runtimeTimeouts.getUpstreamTimeoutConfig({ STREAM_ACTIVE_TIMEOUT_MS: "0" })
+      .streamActiveTimeoutMs,
+    0
+  );
+
+  for (const value of ["-1", "NaN", "Infinity"]) {
+    assert.equal(
+      runtimeTimeouts.getUpstreamTimeoutConfig({ STREAM_ACTIVE_TIMEOUT_MS: value })
+        .streamActiveTimeoutMs,
+      1_260_000
+    );
+  }
+});
+
+test("idle timeout default stays at 10min (600_000) for slow-thinking model safety", () => {
+  // NOTE: PR #2233 originally lowered this to 300_000, but the reviewer asked to keep
+  // the legacy default (slow thinking models, long Anthropic extended-thinking runs).
+  // The heartbeat-shape change is preserved; only the idle-timeout default revert remains.
+  assert.equal(runtimeTimeouts.DEFAULT_STREAM_IDLE_TIMEOUT_MS, 600_000);
+  assert.equal(runtimeTimeouts.getUpstreamTimeoutConfig({}).streamIdleTimeoutMs, 600_000);
 });
 
 test("readiness adaptive cap defaults to 180s and is env-overridable", () => {

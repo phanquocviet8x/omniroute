@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { generateGlobalErrorMessages } from "../i18n/generate-global-error-messages.mjs";
 import {
   assembleStandalone,
   syncStandaloneNativeAssets as _syncNativeAssets,
@@ -13,9 +14,14 @@ import {
 } from "./assembleStandalone.mjs";
 import {
   isBackendOnlyBuild,
+  isContributorBuild,
+  shouldBuildStandalone,
+  stubContributorInstrumentation,
   stubDashboardPages,
   restoreDashboardPages,
 } from "./backendOnlyPages.mjs";
+
+export { shouldBuildStandalone } from "./backendOnlyPages.mjs";
 
 /**
  * Layer 1: `app/` has been renamed to `dist/` and the App-Router collision is gone.
@@ -96,7 +102,16 @@ function runNextBuild() {
     const nextBin = path.join(projectRoot, "node_modules", "next", "dist", "bin", "next");
     const buildEnv = resolveNextBuildEnv(process.env);
     ensureWindowsBuildProfileDirs(buildEnv);
-    const child = spawn(process.execPath, [nextBin, "build", resolveNextBuildBundlerFlag()], {
+    const nextArgs = process.versions.bun
+      ? [
+          "--preload",
+          path.join(projectRoot, "open-sse", "utils", "setupPolyfill.ts"),
+          nextBin,
+          "build",
+          resolveNextBuildBundlerFlag(),
+        ]
+      : [nextBin, "build", resolveNextBuildBundlerFlag()];
+    const child = spawn(process.execPath, nextArgs, {
       cwd: projectRoot,
       stdio: "inherit",
       env: buildEnv,
@@ -122,12 +137,15 @@ function runNextBuild() {
 }
 
 export function resolveNextBuildBundlerFlag(baseEnv = process.env) {
-  // Turbopack is the default production bundler (Next 16 stable). Benchmarked on
-  // this codebase: 2-3x faster than the single-threaded webpack pass (17min -> 9min
-  // on a 32-core box; ~20min -> 7min on ubuntu-latest), artifact validated
-  // end-to-end (standalone smoke + e2e/package/electron CI jobs). Webpack stays as
-  // the explicit escape hatch (=0) for bundler-compat regressions.
-  return baseEnv.OMNIROUTE_USE_TURBOPACK === "0" ? "--webpack" : "--turbopack";
+  // Turbopack is the default; OMNIROUTE_USE_TURBOPACK=0 is the documented escape hatch
+  // to webpack (Windows, native-binding trouble, RAM-constrained machines — #6409, and
+  // docs/reference/ENVIRONMENT.md). The choice is env-only ON PURPOSE: the variable is
+  // the operator's control and CI sets it explicitly, so sniffing the runtime here would
+  // silently override an operator who asked for Turbopack.
+  if (baseEnv.OMNIROUTE_USE_TURBOPACK === "0") {
+    return "--webpack";
+  }
+  return "--turbopack";
 }
 
 /**
@@ -145,6 +163,15 @@ export function resolveNextBuildEnv(baseEnv = process.env, platform = process.pl
   const env = {
     ...baseEnv,
     NEXT_PRIVATE_BUILD_WORKER: baseEnv.NEXT_PRIVATE_BUILD_WORKER || "0",
+    // Reliable build signal inherited by every spawned `next build` worker.
+    // Next.js workers sometimes drop NEXT_PHASE, so DB entry points key off
+    // OMNIROUTE_BUILDING=1 to stub out SQLite and never load the native
+    // better-sqlite3 addon (its Statement destructor SIGABRTs at worker
+    // teardown: node::RemoveEnvironmentCleanupHook). (#10060)
+    OMNIROUTE_BUILDING: "1",
+    // No telemetry, anywhere: disable Next.js's anonymous build-time telemetry
+    // on every build path (local, CI, Docker), not just the image build.
+    NEXT_TELEMETRY_DISABLED: baseEnv.NEXT_TELEMETRY_DISABLED || "1",
   };
 
   // Windows-only: `next build`'s static-generation glob scan and framework cache
@@ -262,6 +289,7 @@ export async function main() {
   };
 
   try {
+    generateGlobalErrorMessages(projectRoot);
     for (const entry of transientBuildPaths) {
       if (!(await exists(entry.sourcePath))) continue;
       await movePath(entry.sourcePath, entry.backupPath);
@@ -273,6 +301,12 @@ export async function main() {
         "[build-next-isolated] OMNIROUTE_BUILD_BACKEND_ONLY set — building API only (dashboard UI stubbed)"
       );
       stubbedPages = stubDashboardPages(projectRoot);
+      if (isContributorBuild()) {
+        stubbedPages.push(...stubContributorInstrumentation(projectRoot));
+        console.log(
+          "[build-next-isolated] Contributor profile: instrumentation entrypoint stubbed for compile-only validation"
+        );
+      }
       process.once("SIGINT", onFatalSignal);
       process.once("SIGTERM", onFatalSignal);
     }
@@ -281,7 +315,7 @@ export async function main() {
 
     const result = await runNextBuild();
     const standaloneDir = path.join(distDir, "standalone");
-    if (result.code === 0 && (await exists(standaloneDir))) {
+    if (result.code === 0 && (await exists(standaloneDir)) && shouldBuildStandalone()) {
       try {
         await fs.cp(path.join(projectRoot, "docs"), path.join(standaloneDir, "docs"), {
           recursive: true,
@@ -327,11 +361,31 @@ export async function main() {
           distDir,
           outDir: standaloneDir,
           projectRoot,
+          // Match the hardened packaging path used by Electron builds:
+          // Turbopack can emit hashed external-package references and
+          // standalone symlinks that break after the bundle is moved/copied.
+          patchTurbopackChunks: true,
           copyNatives: true,
+          materializeSymlinks: true,
         });
+        const { spawnSync } = await import("node:child_process");
+        const basePathWrite = spawnSync(
+          process.execPath,
+          [path.join(projectRoot, "scripts", "build", "write-build-base-path.mjs")],
+          { cwd: projectRoot, env: process.env, stdio: "inherit" }
+        );
+        if (basePathWrite.status !== 0) {
+          console.warn(
+            "[build-next-isolated] Non-fatal error writing BUILD_OMNIROUTE_BASE_PATH sentinel"
+          );
+        }
       } catch (assembleErr) {
         console.warn("[build-next-isolated] Non-fatal error assembling standalone:", assembleErr);
       }
+    } else if (result.code === 0 && !shouldBuildStandalone()) {
+      console.log(
+        "[build-next-isolated] Skipped standalone packaging (standalone disabled for fast compile)"
+      );
     }
     process.exitCode = result.code;
   } catch (error) {

@@ -11,16 +11,20 @@
 import { resolveFeatureFlag } from "@/shared/utils/featureFlags";
 import type {
   JsonRecord,
+  ResilienceSettings,
   RequestQueueSettings,
   ConnectionCooldownProfileSettings,
   ProviderBreakerProfileSettings,
+  TokenRefreshBreakerSettings,
   WaitForCooldownSettings,
   ComboCooldownWaitSettings,
   QuotaShareConcurrencyLimitSettings,
+  StreamStallCooldownSettings,
   ProviderCooldownSettings,
   QuotaPreflightSettings,
   StreamRecoverySettings,
   ProviderQuotaOverrideSettings,
+  CredentialHealthCheckSettings,
 } from "./types";
 
 export function asRecord(value: unknown): JsonRecord {
@@ -83,6 +87,26 @@ export function resolveStreamRecoveryDefaults(): StreamRecoverySettings {
   return {
     enabled: resolveBooleanFeatureFlag("STREAM_RECOVERY_ENABLED", false),
     continueMidStream: resolveBooleanFeatureFlag("STREAM_RECOVERY_MIDSTREAM_ENABLED", false),
+    throughputWatchdog: {
+      enabled: resolveBooleanFeatureFlag("STREAM_THROUGHPUT_WATCHDOG_ENABLED", false),
+      warmupMs: toInteger(process.env.STREAM_THROUGHPUT_WATCHDOG_WARMUP_MS, 30_000, {
+        min: 0,
+        max: 10 * 60 * 1000,
+      }),
+      windowMs: toInteger(process.env.STREAM_THROUGHPUT_WATCHDOG_WINDOW_MS, 30_000, {
+        min: 1_000,
+        max: 10 * 60 * 1000,
+      }),
+      minUsefulBytesPerSecond: toInteger(
+        process.env.STREAM_THROUGHPUT_WATCHDOG_MIN_BYTES_PER_SECOND,
+        4,
+        { min: 1, max: 1_000_000 }
+      ),
+      minUsefulBytes: toInteger(process.env.STREAM_THROUGHPUT_WATCHDOG_MIN_USEFUL_BYTES, 1, {
+        min: 1,
+        max: 1_000_000,
+      }),
+    },
   };
 }
 
@@ -104,7 +128,21 @@ export function normalizeRequestQueueSettings(
     min: 1,
     max: 10_000,
   });
+  const globalConcurrentRequests = toInteger(
+    record.globalConcurrentRequests,
+    fallback.globalConcurrentRequests,
+    { min: 0, max: 100_000 }
+  );
+  // limiter-managed execution deadline off for long-running models (GLM-5.2 with
+  // reasoning.effort=max can spend minutes before the first token, exceeding any
+  // practical maxWaitMs). The TTB safety net is FETCH_TIMEOUT_MS (default 600s).
+  // Issue #4165 follow-up: min:1 silently rewrote 0 → 1, which made an operator's
+  // "disable" intent worse — a 1ms expiration killed every long job instantly.
   const maxWaitMs = toInteger(record.maxWaitMs, fallback.maxWaitMs, {
+    min: 0,
+    max: 24 * 60 * 60 * 1000,
+  });
+  const executionMaxWaitMs = toInteger(record.executionMaxWaitMs, fallback.executionMaxWaitMs, {
     min: 1,
     max: 24 * 60 * 60 * 1000,
   });
@@ -121,7 +159,9 @@ export function normalizeRequestQueueSettings(
     requestsPerMinute,
     minTimeBetweenRequestsMs,
     concurrentRequests,
+    globalConcurrentRequests,
     maxWaitMs,
+    executionMaxWaitMs,
     maxQueueDepth,
   };
 }
@@ -194,6 +234,26 @@ export function normalizeLegacyConnectionCooldownProfile(
     maxBackoffSteps: toInteger(record.maxBackoffLevel, fallback.maxBackoffSteps, {
       min: 0,
       max: 32,
+    }),
+  };
+}
+
+export function normalizeTokenRefreshBreakerSettings(
+  next: unknown,
+  fallback: TokenRefreshBreakerSettings
+): TokenRefreshBreakerSettings {
+  const record = asRecord(next);
+  const scope: TokenRefreshBreakerSettings["scope"] =
+    record.scope === "connection" ? "connection" : "provider";
+  return {
+    scope,
+    failureThreshold: toInteger(record.failureThreshold, fallback.failureThreshold, {
+      min: 1,
+      max: 100,
+    }),
+    cooldownMs: toInteger(record.cooldownMs, fallback.cooldownMs, {
+      min: 60_000,
+      max: 24 * 60 * 60 * 1000,
     }),
   };
 }
@@ -349,6 +409,14 @@ export function normalizeQuotaShareConcurrencyLimitSettings(
   return { enabled: toBoolean(record.enabled, fallback.enabled) };
 }
 
+export function normalizeStreamStallCooldownSettings(
+  next: unknown,
+  fallback: StreamStallCooldownSettings
+): StreamStallCooldownSettings {
+  const record = asRecord(next);
+  return { enabled: toBoolean(record.enabled, fallback.enabled) };
+}
+
 export function normalizeProviderCooldownSettings(
   next: unknown,
   fallback: ProviderCooldownSettings
@@ -372,9 +440,31 @@ export function normalizeStreamRecoverySettings(
   fallback: StreamRecoverySettings
 ): StreamRecoverySettings {
   const record = asRecord(next);
+  const watchdog = asRecord(record.throughputWatchdog);
   return {
     enabled: toBoolean(record.enabled, fallback.enabled),
     continueMidStream: toBoolean(record.continueMidStream, fallback.continueMidStream),
+    throughputWatchdog: {
+      enabled: toBoolean(watchdog.enabled, fallback.throughputWatchdog.enabled),
+      warmupMs: toInteger(watchdog.warmupMs, fallback.throughputWatchdog.warmupMs, {
+        min: 0,
+        max: 10 * 60 * 1000,
+      }),
+      windowMs: toInteger(watchdog.windowMs, fallback.throughputWatchdog.windowMs, {
+        min: 1_000,
+        max: 10 * 60 * 1000,
+      }),
+      minUsefulBytesPerSecond: toInteger(
+        watchdog.minUsefulBytesPerSecond,
+        fallback.throughputWatchdog.minUsefulBytesPerSecond,
+        { min: 1, max: 1_000_000 }
+      ),
+      minUsefulBytes: toInteger(
+        watchdog.minUsefulBytes,
+        fallback.throughputWatchdog.minUsefulBytes,
+        { min: 1, max: 1_000_000 }
+      ),
+    },
   };
 }
 
@@ -389,8 +479,16 @@ function normalizeProviderQuotaOverrideEntry(raw: unknown): ProviderQuotaOverrid
   const out: ProviderQuotaOverrideSettings = {};
   const rpm = typeof record.rpm === "number" ? record.rpm : Number(record.rpm);
   if (Number.isFinite(rpm) && rpm > 0) out.rpm = Math.trunc(rpm);
-  const concurrency = typeof record.concurrency === "number" ? record.concurrency : Number(record.concurrency);
+  const concurrency =
+    typeof record.concurrency === "number" ? record.concurrency : Number(record.concurrency);
   if (Number.isFinite(concurrency) && concurrency > 0) out.concurrency = Math.trunc(concurrency);
+  const providerConcurrency =
+    typeof record.providerConcurrency === "number"
+      ? record.providerConcurrency
+      : Number(record.providerConcurrency);
+  if (Number.isFinite(providerConcurrency) && providerConcurrency >= 0) {
+    out.providerConcurrency = Math.trunc(providerConcurrency);
+  }
   return Object.keys(out).length > 0 ? out : null;
 }
 
@@ -411,4 +509,79 @@ export function normalizeProviderQuotaOverrides(
     if (normalized) out[provider] = normalized;
   }
   return out;
+}
+
+export function normalizeCredentialHealthCheckSettings(
+  next: unknown,
+  fallback: CredentialHealthCheckSettings
+): CredentialHealthCheckSettings {
+  const record = asRecord(next);
+  return {
+    intervalMinutes: toInteger(record.intervalMinutes, fallback.intervalMinutes, {
+      min: 0,
+      max: 1440,
+    }),
+  };
+}
+
+/**
+ * Keep only the leaves of a normalized resilience object that differ from the
+ * fresh defaults. The PATCH route merges the operator body over the stored
+ * partial (which injects defaults for untouched keys) and then prunes the
+ * result against the current defaults, so only operator-chosen values stay
+ * stored and every other key keeps following the environment and flags.
+ */
+export function pruneResilienceSettingsToProvided(
+  merged: ResilienceSettings,
+  freshDefaults: ResilienceSettings
+): Partial<ResilienceSettings> {
+  const sparse = pruneUnknownToProvided(
+    merged as unknown as JsonRecord,
+    freshDefaults as unknown as JsonRecord
+  ) as unknown as Partial<ResilienceSettings>;
+  return sparse;
+}
+
+function pruneUnknownToProvided(merged: JsonRecord, freshDefaults: JsonRecord): JsonRecord {
+  const sparse: JsonRecord = {};
+  for (const [section, value] of Object.entries(merged)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const prunedSection = pruneUnknownToProvided(
+        asRecord(value),
+        asRecord(freshDefaults[section])
+      );
+      if (Object.keys(prunedSection).length > 0) {
+        sparse[section] = prunedSection;
+      }
+      continue;
+    }
+    if (value === undefined) continue;
+    if (section in freshDefaults && valuesEqual(value, freshDefaults[section])) {
+      continue;
+    }
+    sparse[section] = value;
+  }
+  return sparse;
+}
+
+function valuesEqual(first: unknown, second: unknown): boolean {
+  if (first === second) return true;
+  if (
+    first &&
+    second &&
+    typeof first === "object" &&
+    typeof second === "object" &&
+    !Array.isArray(first) &&
+    !Array.isArray(second)
+  ) {
+    const firstRecord = first as Record<string, unknown>;
+    const secondRecord = second as Record<string, unknown>;
+    const firstKeys = Object.keys(firstRecord);
+    const secondKeys = Object.keys(secondRecord);
+    if (firstKeys.length !== secondKeys.length) return false;
+    return firstKeys.every(
+      (key) => key in secondRecord && valuesEqual(firstRecord[key], secondRecord[key])
+    );
+  }
+  return false;
 }

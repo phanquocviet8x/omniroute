@@ -9,6 +9,7 @@ import { compareTr } from "@/shared/utils/turkishText";
 import type { CodexGlobalServiceMode } from "@/lib/providers/codexFastTier";
 import { supportsProviderQuota } from "@/shared/utils/providerQuotaVisibility";
 import type { ConnectionDeleteConfirmState } from "../hooks/useConnectionDeleteConfirm";
+import type { ProviderQuotaCacheEntry } from "../hooks/useProviderQuota";
 import { filterConnectionsByQuery } from "../connectionsSearchFilter";
 
 type ConnectionsListPanelProps = {
@@ -50,7 +51,16 @@ type ConnectionsListPanelProps = {
   handleToggleRateLimit: (id: string, enabled: boolean) => void;
   handleToggleQuotaVisibility: (id: string, visible: boolean) => void;
   handleToggleClaudeExtraUsage: (id: string, enabled: boolean) => void;
+  handleToggleCodexPaidCredits: (id: string, enabled: boolean) => void;
+  canAutoSync?: boolean;
+  handleToggleConnectionAutoSync?: (connectionId: string, enabled: boolean) => void;
   handleToggleCliproxyapiMode: (id: string, enabled: boolean) => void;
+  handleSetUpstreamProxyMode: (
+    mode: "native" | "cliproxyapi" | "dario" | "fallback",
+    fallbackBackend?: "cliproxyapi" | "dario"
+  ) => void;
+  upstreamProxyMode: "native" | "cliproxyapi" | "dario" | "fallback";
+  upstreamProxyFallbackBackend: "cliproxyapi" | "dario";
   handleToggleCodexLimit: (id: string, type: "use5h" | "useWeekly", enabled: boolean) => void;
   handleToggleProxyEnabled: (id: string, enabled: boolean) => void;
   handleTogglePerKeyProxyEnabled: (id: string, enabled: boolean) => void;
@@ -64,6 +74,10 @@ type ConnectionsListPanelProps = {
   handleToggleSelectAll: () => void;
   handleDistributeProxies: (tag?: string) => void;
   cpaProviderEnabled: boolean;
+  // Per-account quota strip (useProviderQuota) — threaded to every row.
+  quotaByConnectionId: Record<string, ProviderQuotaCacheEntry>;
+  quotaRefreshingIds: ReadonlySet<string>;
+  handleRefreshQuota: (id: string) => void;
   // Modal triggers (all pass through from client, no closing over client internals)
   onOpenEditModal: (conn: ConnectionRowConnection) => void;
   onOpenOAuth: (conn: ConnectionRowConnection) => void;
@@ -128,7 +142,12 @@ export default function ConnectionsListPanel({
   handleToggleRateLimit,
   handleToggleQuotaVisibility,
   handleToggleClaudeExtraUsage,
+  handleToggleCodexPaidCredits,
+  handleToggleConnectionAutoSync,
   handleToggleCliproxyapiMode,
+  handleSetUpstreamProxyMode,
+  upstreamProxyMode,
+  upstreamProxyFallbackBackend,
   handleToggleCodexLimit,
   handleToggleProxyEnabled,
   handleTogglePerKeyProxyEnabled,
@@ -142,6 +161,10 @@ export default function ConnectionsListPanel({
   handleToggleSelectAll,
   handleDistributeProxies,
   cpaProviderEnabled,
+  quotaByConnectionId,
+  quotaRefreshingIds,
+  handleRefreshQuota,
+  canAutoSync,
   onOpenEditModal,
   onOpenOAuth,
   onSetProxyTarget,
@@ -391,10 +414,21 @@ export default function ConnectionsListPanel({
                 onToggleClaudeExtraUsage={(enabled) =>
                   handleToggleClaudeExtraUsage(conn.id, enabled)
                 }
-                isCodex={providerId === "codex"}
+                onToggleCodexPaidCredits={(enabled) =>
+                  handleToggleCodexPaidCredits(conn.id, enabled)
+                }
+                onToggleAutoSync={
+                  canAutoSync && handleToggleConnectionAutoSync
+                    ? (enabled) => handleToggleConnectionAutoSync(conn.id, enabled)
+                    : undefined
+                }
+                isCodex={providerId === "codex" || providerId === "codex-app-server"}
                 isCcCompatible={isCcCompatible}
                 cliproxyapiEnabled={cpaProviderEnabled}
                 onToggleCliproxyapiMode={(enabled) => handleToggleCliproxyapiMode(conn.id, enabled)}
+                upstreamProxyMode={upstreamProxyMode}
+                upstreamProxyFallbackBackend={upstreamProxyFallbackBackend}
+                onSetUpstreamProxyMode={handleSetUpstreamProxyMode}
                 onToggleCodex5h={(enabled) => handleToggleCodexLimit(conn.id, "use5h", enabled)}
                 onToggleCodexWeekly={(enabled) =>
                   handleToggleCodexLimit(conn.id, "useWeekly", enabled)
@@ -450,6 +484,9 @@ export default function ConnectionsListPanel({
                 onTogglePerKeyProxyEnabled={(enabled) =>
                   handleTogglePerKeyProxyEnabled(conn.id, enabled)
                 }
+                quotaCache={quotaByConnectionId[conn.id]}
+                quotaRefreshing={quotaRefreshingIds.has(conn.id)}
+                onRefreshQuota={() => handleRefreshQuota(conn.id)}
               />
             ))
           )}
@@ -584,12 +621,23 @@ export default function ConnectionsListPanel({
                     onToggleClaudeExtraUsage={(enabled) =>
                       handleToggleClaudeExtraUsage(conn.id, enabled)
                     }
-                    isCodex={providerId === "codex"}
+                    onToggleCodexPaidCredits={(enabled) =>
+                      handleToggleCodexPaidCredits(conn.id, enabled)
+                    }
+                    onToggleAutoSync={
+                      canAutoSync && handleToggleConnectionAutoSync
+                        ? (enabled) => handleToggleConnectionAutoSync(conn.id, enabled)
+                        : undefined
+                    }
+                    isCodex={providerId === "codex" || providerId === "codex-app-server"}
                     isCcCompatible={isCcCompatible}
                     cliproxyapiEnabled={cpaProviderEnabled}
                     onToggleCliproxyapiMode={(enabled) =>
                       handleToggleCliproxyapiMode(conn.id, enabled)
                     }
+                    upstreamProxyMode={upstreamProxyMode}
+                    upstreamProxyFallbackBackend={upstreamProxyFallbackBackend}
+                    onSetUpstreamProxyMode={handleSetUpstreamProxyMode}
                     onToggleCodex5h={(enabled) => handleToggleCodexLimit(conn.id, "use5h", enabled)}
                     onToggleCodexWeekly={(enabled) =>
                       handleToggleCodexLimit(conn.id, "useWeekly", enabled)
@@ -645,6 +693,9 @@ export default function ConnectionsListPanel({
                     onTogglePerKeyProxyEnabled={(enabled) =>
                       handleTogglePerKeyProxyEnabled(conn.id, enabled)
                     }
+                    quotaCache={quotaByConnectionId[conn.id]}
+                    quotaRefreshing={quotaRefreshingIds.has(conn.id)}
+                    onRefreshQuota={() => handleRefreshQuota(conn.id)}
                   />
                 ))}
               </div>

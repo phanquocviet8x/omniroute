@@ -82,13 +82,11 @@ export default function SecurityTab() {
         setRequireLoginModalOpen(false);
       } else {
         const data = await res.json();
-        setRequireLoginError(
-          data?.error?.message || t("errorOccurred", { fallback: "An error occurred" })
-        );
+        setRequireLoginError(data?.error?.message || t("errorOccurred"));
       }
     } catch (err) {
       console.error("Failed to update require login:", err);
-      setRequireLoginError(t("errorOccurred", { fallback: "An error occurred" }));
+      setRequireLoginError(t("errorOccurred"));
     } finally {
       setRequireLoginLoading(false);
     }
@@ -197,9 +195,7 @@ export default function SecurityTab() {
             title={t("currentPassword")}
           >
             <div className="flex flex-col gap-4">
-              <p className="text-sm text-text-muted">
-                {t("enterCurrentPassword", { fallback: "Enter your current password to continue" })}
-              </p>
+              <p className="text-sm text-text-muted">{t("enterCurrentPassword")}</p>
               <Input
                 label={t("currentPassword")}
                 type="password"
@@ -227,7 +223,7 @@ export default function SecurityTab() {
                   loading={requireLoginLoading}
                   disabled={!requireLoginPassword}
                 >
-                  {t("confirm", { fallback: "Confirm" })}
+                  {t("confirm")}
                 </Button>
               </div>
             </div>

@@ -1,10 +1,8 @@
 // Re-export from open-sse with local logger
 import * as log from "../utils/logger";
-import {
-  updateProviderConnection,
-  resolveProxyForConnection,
-  resolveProxyForProvider,
-} from "@/lib/localDb";
+import { updateProviderConnection } from "@/lib/db/providers";
+import { resolveProxyForConnection } from "@/lib/db/settings";
+import { resolveProxyForProvider, hasBlockingProxyAssignment } from "@/lib/db/proxies";
 import {
   TOKEN_EXPIRY_BUFFER_MS as BUFFER_MS,
   getRefreshLeadMs as _getRefreshLeadMs,
@@ -31,11 +29,48 @@ import {
 
 export const TOKEN_EXPIRY_BUFFER_MS = BUFFER_MS;
 
-async function resolveProxyForCredentials(provider: string, credentials?: any) {
+/**
+ * #13470: mirrors the #6246 fail-closed policy (`src/sse/handlers/chatHelpers.ts`
+ * ::safeResolveProxy / decideProxyResolutionFailure) for the background
+ * token-refresh path. Duplicated verbatim here — importing decideProxyResolutionFailure
+ * from chatHelpers.ts would create an import cycle (chatHelpers.ts already imports
+ * updateProviderCredentials from this module).
+ */
+function decideTokenRefreshProxyFailure(err: unknown): null {
+  if ((process.env.PROXY_FAIL_OPEN ?? "").trim().toLowerCase() === "true") {
+    log.warn(
+      "PROXY",
+      `Token-refresh proxy resolution failed — PROXY_FAIL_OPEN=true, falling back to DIRECT: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return null;
+  }
+  throw err instanceof Error ? err : new Error(String(err));
+}
+
+/**
+ * #13470: a connection whose assigned proxy pool has gone fully dead must not
+ * silently fall through to direct/env-proxy egress for its background refresh-token
+ * exchange — that is the same class of IP-provenance leak #6246 closed for the
+ * interactive chat/executor path (`safeResolveProxy`), on a more sensitive
+ * payload (the refresh token itself). Exported for direct testing.
+ */
+export async function resolveProxyForCredentials(provider: string, credentials?: any) {
   if (credentials?.connectionId) {
     const resolved = await resolveProxyForConnection(credentials.connectionId);
     if (resolved?.proxy) {
       return resolved.proxy;
+    }
+    if (hasBlockingProxyAssignment(credentials.connectionId, provider)) {
+      return decideTokenRefreshProxyFailure(
+        Object.assign(
+          new Error(
+            "PROXY_ASSIGNED_UNAVAILABLE: assigned proxy is inactive/unreachable; refusing to egress background token refresh on a direct connection"
+          ),
+          { code: "PROXY_ASSIGNED_UNAVAILABLE" }
+        )
+      );
     }
   }
 
@@ -82,10 +117,33 @@ export const refreshGitHubToken = async (refreshToken: string, credentials?: any
   return _refreshGitHubToken(refreshToken, log, proxy);
 };
 
-export const refreshCopilotToken = async (githubAccessToken: string, credentials?: any) => {
+export const refreshCopilotToken = async (
+  githubAccessToken: string,
+  credentials?: any,
+  baseUrl?: string
+) => {
   const proxy = await resolveProxyForCredentials("github", credentials);
-  return _refreshCopilotToken(githubAccessToken, log, proxy);
+  return baseUrl
+    ? _refreshCopilotToken(githubAccessToken, log, proxy, baseUrl)
+    : _refreshCopilotToken(githubAccessToken, log, proxy);
 };
+
+/**
+ * Resolve the Copilot token endpoint base URL for a provider/credentials pair.
+ * github.com Copilot always uses api.github.com; GHE Copilot uses its own
+ * per-enterprise host stored in providerSpecificData.gheUrl at connect time.
+ */
+export function resolveCopilotTokenBaseUrl(
+  provider: string,
+  credentials?: any
+): string | undefined {
+  if (provider !== "ghe-copilot") return undefined;
+  const gheUrl = credentials?.providerSpecificData?.gheUrl;
+  if (typeof gheUrl === "string" && gheUrl.trim().length > 0) {
+    return `${gheUrl.trim().replace(/\/+$/, "")}/api/v3`;
+  }
+  return undefined;
+}
 
 export const getAccessToken = async (
   provider: string,
@@ -147,7 +205,7 @@ export async function updateProviderCredentials(connectionId: string, newCredent
     if (newCredentials.providerSpecificData) {
       updates.providerSpecificData = newCredentials.providerSpecificData;
     }
-    // Cookie/session providers (chatgpt-web, ...) refresh by rotating the
+    // Cookie/session providers (Perplexity Web, etc.) refresh by rotating the
     // stored apiKey blob — propagate that here too so DB credentials don't
     // go stale after Set-Cookie rotation.
     if (newCredentials.apiKey) {
@@ -160,7 +218,19 @@ export async function updateProviderCredentials(connectionId: string, newCredent
       updates.isActive = newCredentials.isActive;
     }
 
-    const result = await updateProviderConnection(connectionId, updates);
+    // #13389: a token rotation touches only credential/health fields — the
+    // model catalog builder never reads them, and OAuth refreshes fire
+    // continuously on a live instance (Copilot/Kiro/Claude proactive
+    // refreshes), so a full bust here cold-rebuilds /v1/models on nearly
+    // every dashboard hit. `isActive` and `providerSpecificData` CAN change
+    // catalog-relevant state, so those updates keep the default invalidation.
+    const catalogRelevant =
+      updates.isActive !== undefined || updates.providerSpecificData !== undefined;
+    const result = await updateProviderConnection(
+      connectionId,
+      updates,
+      catalogRelevant ? undefined : { skipModelCatalog: true }
+    );
     log.info("TOKEN_REFRESH", "Credentials updated in localDb", {
       connectionId,
       success: !!result,
@@ -230,8 +300,15 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
     }
   }
 
-  // Check GitHub copilot token expiry
-  if (provider === "github" && updatedCredentials.providerSpecificData?.copilotTokenExpiresAt) {
+  // Check GitHub/GHE Copilot token expiry. Both github.com Copilot and GHE
+  // Copilot (device-code flow against an enterprise host) issue a short-lived
+  // sub-token separate from the OAuth access token, stored the same way in
+  // providerSpecificData.copilotTokenExpiresAt — only the token endpoint host
+  // differs (resolveCopilotTokenBaseUrl picks it via providerSpecificData.gheUrl).
+  if (
+    (provider === "github" || provider === "ghe-copilot") &&
+    updatedCredentials.providerSpecificData?.copilotTokenExpiresAt
+  ) {
     const copilotExpiresAt = updatedCredentials.providerSpecificData.copilotTokenExpiresAt * 1000;
     const now = Date.now();
 
@@ -243,9 +320,10 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
 
       const copilotToken = await refreshCopilotToken(
         updatedCredentials.accessToken,
-        updatedCredentials
+        updatedCredentials,
+        resolveCopilotTokenBaseUrl(provider, updatedCredentials)
       );
-      if (copilotToken) {
+      if (copilotToken?.token) {
         await updateProviderCredentials(updatedCredentials.connectionId, {
           providerSpecificData: {
             ...updatedCredentials.providerSpecificData,
@@ -273,7 +351,7 @@ export async function refreshGitHubAndCopilotTokens(credentials: any) {
   const newGitHubCredentials = await refreshGitHubToken(credentials.refreshToken, credentials);
   if (newGitHubCredentials?.accessToken) {
     const copilotToken = await refreshCopilotToken(newGitHubCredentials.accessToken, credentials);
-    if (copilotToken) {
+    if (copilotToken?.token) {
       return {
         ...newGitHubCredentials,
         providerSpecificData: {

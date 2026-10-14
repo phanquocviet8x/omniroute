@@ -18,6 +18,8 @@ interface FeatureFlagCardProps {
   onToggle: (key: string, newValue: string) => void;
   onReset: (key: string) => void;
   saving?: boolean;
+  /** "clamp": 2-line clamp + full text on hover. "full": always expanded. */
+  descriptionMode?: "clamp" | "full";
 }
 
 const CATEGORY_STYLES: Record<
@@ -93,11 +95,34 @@ function Spinner() {
   );
 }
 
+/**
+ * `EXPOSE_CC_DISCOVERY_ALIASES` resolves with env-wins-over-db precedence (see
+ * db/ccDiscoveryAliases.ts::getCcAliasGlobalState), the opposite of every other
+ * flag — so a plain ENV badge could be misread as "toggle it off here" when the
+ * environment variable is what is actually forcing it on. Renders nothing for
+ * any other flag or source.
+ */
+function EnvPrecedenceWarning({
+  flag,
+  text,
+}: {
+  flag: FeatureFlagCardProps["flag"];
+  text: string;
+}) {
+  if (flag.key !== "EXPOSE_CC_DISCOVERY_ALIASES" || flag.source !== "env") return null;
+  return (
+    <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+      {text}
+    </p>
+  );
+}
+
 export default function FeatureFlagCard({
   flag,
   onToggle,
   onReset,
   saving = false,
+  descriptionMode = "clamp",
 }: FeatureFlagCardProps) {
   const t = useTranslations("featureFlags");
   const enabled = flag.type === "boolean" ? isEnabled(flag.effectiveValue) : false;
@@ -190,8 +215,31 @@ export default function FeatureFlagCard({
         )}
       </div>
 
-      {/* Description */}
-      <p className="mb-3 line-clamp-2 text-xs text-text-muted">{flag.description}</p>
+      {/* Description — either always expanded in full, or clamped to 2 lines
+          with the full text revealed on hover (mode set in the grid toolbar) */}
+      {descriptionMode === "full" ? (
+        <p className="mb-3 text-pretty text-xs leading-relaxed text-text-muted">
+          {flag.description}
+        </p>
+      ) : (
+        <div className="group/desc relative">
+          <p
+            aria-describedby={`desc-tooltip-${flag.key}`}
+            className="mb-3 cursor-help line-clamp-2 text-xs text-text-muted"
+          >
+            {flag.description}
+          </p>
+          <div
+            id={`desc-tooltip-${flag.key}`}
+            role="tooltip"
+            className="pointer-events-none invisible absolute left-0 top-full z-50 mt-2 w-80 rounded-lg border border-border bg-surface p-3 text-xs leading-relaxed text-text-primary opacity-0 shadow-lg transition-opacity duration-150 group-hover/desc:visible group-hover/desc:opacity-100"
+          >
+            {flag.description}
+          </div>
+        </div>
+      )}
+
+      <EnvPrecedenceWarning flag={flag} text={t("ccDiscoveryAliasesEnvWarning")} />
 
       {/* Bottom row: source badge + reset button */}
       <div className="flex items-center justify-between">

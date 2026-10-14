@@ -17,21 +17,29 @@ type FormData = QuotaScrapingFieldValues &
   GlmTeamQuotaFieldValues & {
     accountId: string;
     apiRegion: string;
+    awsAccessKeyId: string;
+    awsSessionToken: string;
     ccCompatibleContext1m: boolean;
     ccCompatibleRedactThinking: boolean;
     ccCompatibleSummarizeThinking: boolean;
     consoleApiKey: string;
     customUserAgent: string;
+    huggingfaceBillTo: string;
     cx: string;
     excludedModels: string;
     importFreeModelsOnly: boolean;
     m365Tier?: M365TierValue;
+    newApiAggregatorBalance: boolean;
     newApiUserId: string;
     passthroughModels: boolean;
+    quotaPerUnit: string;
     region: string;
     routingTags: string;
     tag?: string;
     validationModelId?: string;
+    tunnelId: string;
+    connectorName: string;
+    runtimeKey?: string;
   };
 type ProviderSpecificData = Record<string, unknown>;
 
@@ -80,18 +88,39 @@ export function buildAddProviderSpecificData(options: {
   if (CONSOLE_API_KEY_PROVIDERS.has(provider ?? "") && formData.consoleApiKey.trim()) {
     data.consoleApiKey = formData.consoleApiKey.trim();
   }
+  if (provider === "huggingface" && formData.huggingfaceBillTo.trim()) {
+    data.billTo = formData.huggingfaceBillTo.trim();
+  }
   if (provider === "agentrouter" && formData.newApiUserId.trim()) {
     data.newApiUserId = formData.newApiUserId.trim();
   }
   assignQuotaScrapingProviderData(provider, formData, data);
   if (isGooglePse && formData.cx.trim()) data.cx = formData.cx.trim();
-  if (usesBaseUrl) data.baseUrl = validatedBaseUrl;
+  if (provider === "aws-polly") {
+    data.accessKeyId = formData.awsAccessKeyId.trim() || undefined;
+    data.region = formData.region.trim() || "us-east-1";
+    data.sessionToken = formData.awsSessionToken.trim() || undefined;
+  } else if (usesBaseUrl) data.baseUrl = validatedBaseUrl;
   if (showsRegion) data.region = formData.region?.trim() || defaultRegion;
   else if (isGlm) {
     data.apiRegion = formData.apiRegion;
     assignGlmTeamQuotaProviderData(isGlm, formData, data);
   } else if (isCloudflare && formData.accountId.trim()) data.accountId = formData.accountId.trim();
   if (isCcCompatible) assignCcCompatibleRequestDefaults(data, formData);
+  // #9415 — New-API / One-API / Sub2API aggregator balance detection
+  if (formData.newApiAggregatorBalance) {
+    data.newApiAggregatorBalance = true;
+    if (formData.consoleApiKey.trim()) data.consoleApiKey = formData.consoleApiKey.trim();
+    if (formData.newApiUserId.trim()) data.newApiUserId = formData.newApiUserId.trim();
+    const parsedQuotaPerUnit = parseInt(formData.quotaPerUnit, 10);
+    if (Number.isFinite(parsedQuotaPerUnit) && parsedQuotaPerUnit > 0) {
+      data.quotaPerUnit = parsedQuotaPerUnit;
+    }
+  }
+  if (provider === "chatgpt-web-codex") {
+    if (formData.tunnelId.trim()) data.tunnelId = formData.tunnelId.trim();
+    if (formData.connectorName.trim()) data.connectorName = formData.connectorName.trim();
+  }
   return Object.keys(data).length > 0 ? data : undefined;
 }
 
@@ -125,13 +154,25 @@ export function assignEditApiKeyProviderSpecificData(options: {
   if (CONSOLE_API_KEY_PROVIDERS.has(o.provider)) {
     o.target.consoleApiKey = o.formData.consoleApiKey.trim() || undefined;
   }
+  if (o.provider === "huggingface") {
+    // Explicit `null`, not `undefined`: the PUT route merges
+    // { ...existing, ...incoming } and JSON.stringify drops `undefined`, so
+    // an omitted key would keep the previously-saved value and clearing the
+    // field would never take effect. `null` survives the wire and the
+    // normalizer deletes it, removing the stored value.
+    o.target.billTo = o.formData.huggingfaceBillTo.trim() || null;
+  }
   if (o.provider === "agentrouter") {
     o.target.newApiUserId = o.formData.newApiUserId.trim() || undefined;
   }
   assignQuotaScrapingProviderData(o.provider, o.formData, o.target);
   if (o.formData.validationModelId) o.target.validationModelId = o.formData.validationModelId;
   if (o.isGooglePse) o.target.cx = o.formData.cx.trim() || undefined;
-  if (o.usesBaseUrl) o.target.baseUrl = o.validatedBaseUrl;
+  if (o.provider === "aws-polly") {
+    o.target.accessKeyId = o.formData.awsAccessKeyId.trim() || undefined;
+    o.target.region = o.formData.region.trim() || "us-east-1";
+    o.target.sessionToken = o.formData.awsSessionToken.trim() || undefined;
+  } else if (o.usesBaseUrl) o.target.baseUrl = o.validatedBaseUrl;
   if (o.showsRegion) o.target.region = o.formData.region?.trim() || o.defaultRegion;
   else if (o.isGlm) {
     o.target.apiRegion = o.formData.apiRegion;
@@ -146,5 +187,24 @@ export function assignEditApiKeyProviderSpecificData(options: {
       o.target.requestDefaults,
       o.formData
     );
+  }
+  // #9415 — New-API / One-API / Sub2API aggregator balance detection
+  if (o.formData.newApiAggregatorBalance) {
+    o.target.newApiAggregatorBalance = true;
+    o.target.consoleApiKey = o.formData.consoleApiKey.trim() || undefined;
+    o.target.newApiUserId = o.formData.newApiUserId.trim() || undefined;
+    const parsedQuotaPerUnit = parseInt(o.formData.quotaPerUnit, 10);
+    if (Number.isFinite(parsedQuotaPerUnit) && parsedQuotaPerUnit > 0) {
+      o.target.quotaPerUnit = parsedQuotaPerUnit;
+    } else {
+      o.target.quotaPerUnit = undefined;
+    }
+  } else {
+    o.target.newApiAggregatorBalance = undefined;
+    o.target.quotaPerUnit = undefined;
+  }
+  if (o.provider === "chatgpt-web-codex") {
+    o.target.tunnelId = o.formData.tunnelId.trim() || undefined;
+    o.target.connectorName = o.formData.connectorName.trim() || undefined;
   }
 }

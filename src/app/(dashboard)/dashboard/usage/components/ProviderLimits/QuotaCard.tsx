@@ -2,6 +2,10 @@
 
 import { useMemo, useState } from "react";
 import Card from "@/shared/components/Card";
+import {
+  isProviderBillingProvider,
+  type ProviderBillingStatus,
+} from "@/shared/utils/providerBilling";
 import { pickDisplayValue } from "@/shared/utils/maskEmail";
 import {
   normalizePlanTier,
@@ -17,6 +21,7 @@ import {
 import QuotaCardHeader from "./parts/QuotaCardHeader";
 import QuotaCardExpanded from "./parts/QuotaCardExpanded";
 import ProviderUsdCostModal from "./ProviderUsdCostModal";
+import type { CodexPaidCredits } from "@/lib/providers/codexPaidCredits";
 
 const STATUS_BORDER: Record<CardStatus, string> = {
   critical: "#ef4444",
@@ -34,6 +39,12 @@ interface QuotaCardProps {
         quotas?: any[];
         plan?: string | null;
         message?: string | null;
+        billing?: ProviderBillingStatus | null;
+        raw?: {
+          billing?: ProviderBillingStatus | null;
+          quotaGroups?: Array<Record<string, unknown>>;
+          paidCredits?: CodexPaidCredits;
+        };
         stale?: { since?: string; reason?: string } | null;
       }
     | undefined;
@@ -89,13 +100,23 @@ export default function QuotaCard({
   const tierMeta = useMemo(
     () =>
       normalizePlanTier(
-        resolvePlanValue(quota?.plan ?? null, connection.providerSpecificData ?? null)
+        resolvePlanValue(
+          quota?.plan ?? null,
+          connection.providerSpecificData ?? null,
+          connection.provider
+        ),
+        connection.provider
       ),
-    [quota?.plan, connection.providerSpecificData]
+    [quota?.plan, connection.providerSpecificData, connection.provider]
   );
   const resolvedPlan = useMemo(
-    () => resolvePlanValue(quota?.plan ?? null, connection.providerSpecificData ?? null),
-    [quota?.plan, connection.providerSpecificData]
+    () =>
+      resolvePlanValue(
+        quota?.plan ?? null,
+        connection.providerSpecificData ?? null,
+        connection.provider
+      ),
+    [quota?.plan, connection.providerSpecificData, connection.provider]
   );
   const accountLabel = useMemo(
     () =>
@@ -131,13 +152,21 @@ export default function QuotaCard({
         hasStaleData={hasStaleData}
         onToggleActive={onToggleActive}
         togglingActive={togglingActive}
+        onTestSent={onRefresh}
       />
       <QuotaCardExpanded
         quotas={quotas}
+        quotaGroups={quota?.raw?.quotaGroups}
         providerId={connection.provider}
         loading={loading}
         error={error}
         message={quota?.message ?? null}
+        paidCredits={connection.provider === "codex" ? quota?.raw?.paidCredits : undefined}
+        billing={
+          isProviderBillingProvider(connection.provider)
+            ? (quota?.billing ?? quota?.raw?.billing)
+            : null
+        }
         refreshedAt={displayRefreshedAt}
         hasStaleData={hasStaleData}
         onRefresh={onRefresh}

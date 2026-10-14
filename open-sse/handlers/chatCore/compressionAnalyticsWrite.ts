@@ -10,7 +10,7 @@
  * stays under the complexity cap.
  */
 
-import { type CompressionStats } from "../../services/compression/stats.ts";
+import { type CompressionStats } from "../../services/compression/types.ts";
 
 type LoggerLike =
   | {
@@ -149,7 +149,10 @@ export function writeCompressionAnalytics(
           opts.provider ?? "",
           opts.effectiveModel ?? "",
           { input: tokensSaved },
-          { serviceTier: opts.effectiveServiceTier }
+          // Flat-rate (subscription / cookie-web) lanes don't bill per token, so
+          // their per-token pricing rows must not book dollar "savings" here
+          // (same opt-in as /api/usage/analytics, #5552).
+          { serviceTier: opts.effectiveServiceTier, flatRateAsZero: true }
         );
       } catch (err) {
         opts.log?.debug?.(

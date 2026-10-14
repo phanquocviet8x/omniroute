@@ -72,12 +72,25 @@ const KNOWN_PLANS: Record<string, KnownPlanShape> = {
       { unit: "tokens", window: "weekly", limit: Number.EPSILON },
     ],
   },
+  // Muse Code subscriptions (Everyday / High / Power / contributor) have no
+  // OmniRoute-side balance API. Upstream 429 bodies carry `error.resets_at`.
+  "muse-code": {
+    provider: "muse-code",
+    dimensions: [{ unit: "tokens", window: "weekly", limit: Number.EPSILON }],
+  },
   // Xiaomi MiMo token plan (platform.xiaomimimo.com/token-plan) is a MONTHLY
   // allowance with no balance API. Default seeds the "lite" plan's 4.1B-token
   // monthly cap so the Wizard pre-fills a usable fair-share limit; adjust in the
   // "Limite" step to match the connection's actual plan.
   "xiaomi-mimo": {
     provider: "xiaomi-mimo",
+    dimensions: [{ unit: "tokens", window: "monthly", limit: 4_100_000_000 }],
+  },
+  // Xiaomi MiMo Token Plan (token-plan-sgp): same MONTHLY allowance with no
+  // balance API as the regular account plan. Adjust in the Wizard's "Limite"
+  // step when the connection is on a different plan.
+  "xiaomi-mimo-token-plan": {
+    provider: "xiaomi-mimo-token-plan",
     dimensions: [{ unit: "tokens", window: "monthly", limit: 4_100_000_000 }],
   },
   alibaba: {

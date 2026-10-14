@@ -40,7 +40,20 @@ export async function handleResponsesCore({
   const customToolNames = collectResponsesCustomToolNames(body?.tools, inputItems);
 
   // Convert Responses API format to Chat Completions format
-  const convertedBody = convertResponsesApiFormat(body, credentials, modelInfo?.provider);
+  const convertedBody = convertResponsesApiFormat(
+    body,
+    credentials,
+    modelInfo?.provider,
+    modelInfo?.model
+  );
+
+  // #14154 — capture the #7936 {namespace, name} identity ledger BEFORE
+  // handleChatCore dispatches: extractRequestToolIdentityMap() deletes this
+  // side channel from the same object once the request is translated, so it
+  // must be read here to reach the response transform stream below.
+  const requestToolIdentityMap =
+    (convertedBody as { _namespaceToolIdentityMap?: Map<string, unknown> })
+      ._namespaceToolIdentityMap ?? null;
 
   // Ensure stream is enabled
   convertedBody.stream = true;
@@ -58,8 +71,16 @@ export async function handleResponsesCore({
     connectionId,
     userAgent: null,
     comboName: null,
+    onStreamFailure: null,
   });
 
+  // handleChatCore's union includes a bare Response (early returns that never
+  // reach the {success, response} envelope). Peel it off first so the envelope
+  // checks below are reading a shape that actually has those fields — the
+  // outcome is unchanged, a bare Response was already returned as-is.
+  if (result instanceof Response) {
+    return result;
+  }
   if (!result.success || !result.response) {
     return result;
   }
@@ -73,7 +94,10 @@ export async function handleResponsesCore({
   }
 
   // Transform SSE stream to Responses API format (no logging in worker)
-  const transformStream = createResponsesApiTransformStream(null, undefined, { customToolNames });
+  const transformStream = createResponsesApiTransformStream(null, undefined, {
+    customToolNames,
+    requestToolIdentityMap,
+  });
   const transformedBody = response.body.pipeThrough(transformStream).pipeThrough(
     createSseHeartbeatTransform({
       signal,

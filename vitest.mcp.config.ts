@@ -6,7 +6,10 @@ export default defineConfig({
     environment: "node",
     globals: true,
     pool: "threads",
-    maxWorkers: 20,
+    // MCP suites initialize isolated SQLite databases; Vitest 5 at 20 workers
+    // makes native migration/close operations contend and flakes audit tests.
+    // Keep all files/tests enabled while bounding the worker fan-out.
+    maxWorkers: 4,
     fileParallelism: true,
     maxConcurrency: 20,
     include: [
@@ -14,7 +17,12 @@ export default defineConfig({
       "open-sse/services/autoCombo/__tests__/**/*.test.ts",
       "open-sse/services/combo/__tests__/**/*.test.ts",
       "open-sse/services/__tests__/antigravity-quota-family.test.ts",
+      // #8890 shipped this suite into a directory no runner collects, so it had
+      // never executed once (check:test-discovery flags it as a NEW orphan).
+      "open-sse/services/__tests__/fail-fast-concurrency-gate.test.ts",
+      "src/lib/memory/__tests__/generic-backend.test.ts",
       "tests/unit/autoCombo/**/*.test.ts",
+      "tests/unit/api/**/*.spec.ts",
       "tests/unit/encryption.spec.ts",
       "src/shared/components/**/*.test.tsx",
       "src/shared/hooks/__tests__/**/*.test.tsx",

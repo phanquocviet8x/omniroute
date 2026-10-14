@@ -24,14 +24,21 @@ export default defineConfig({
       "tests/unit/**/*.test.tsx",
       "open-sse/**/__tests__/**/*.test.ts",
       "open-sse/services/**/__tests__/**/*.test.ts",
+    ],
+    exclude: [
+      // Standard Vitest / tooling exclusions
+      "node_modules/**",
+      "dist/**",
+      "cypress/**",
+      ".idea/**",
+      ".git/**",
+      ".cache/**",
+      // Live-server E2E — these drive a real running server, so they must never run
+      // in this jsdom job. They have their own runners + vitest.e2e-live.config.ts.
       "tests/e2e/ecosystem.test.ts",
       "tests/e2e/protocol-clients.test.ts",
     ],
-    exclude: [
-      "**/node_modules/**",
-      "**/.git/**",
-      "open-sse/services/autoCombo/__tests__/providerDiversity.test.ts",
-    ],
+
     coverage: {
       reportsDirectory: "coverage",
     },
@@ -39,6 +46,11 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      // Optional native embeddings are outside the UI unit-test runtime.
+      "@huggingface/transformers": path.resolve(
+        __dirname,
+        "./tests/_setup/transformersUnavailable.ts"
+      ),
       "@": path.resolve(__dirname, "./src"),
       // Mirrors tsconfig paths. Without it, a UI test importing from open-sse
       // resolves to undefined instead of failing loudly — which silently made

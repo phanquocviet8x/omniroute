@@ -2,12 +2,17 @@ import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
 import { resolveMitmDataDir } from "./dataDir.ts";
-import { removeDNSEntry, removeDNSEntries, checkDNSEntryForAgent } from "./dns/dnsConfig.ts";
+import {
+  removeDNSEntry,
+  removeDNSEntries,
+  checkDNSEntryForAgent,
+  checkDNSEntry,
+} from "./dns/dnsConfig.ts";
 import { provisionDnsEntries } from "./dns/provision.ts";
 import { generateCert } from "./cert/generate.ts";
 import { installCertResult, installCaCert } from "./cert/install.ts";
 import { loadOrCreateMitmCa, resolveMitmCertDir } from "./cert/rootCa.ts";
-import { decideCertMigration } from "./cert/migration.ts";
+import { resolveActiveCertPath } from "./cert/activeCert.ts";
 import { ALL_TARGETS } from "./targets/index.ts";
 import { detectAgent } from "./detection/index.ts";
 import type { AgentId, DetectionResult, MitmTarget } from "./types.ts";
@@ -23,7 +28,7 @@ import {
   type RepairPlan,
 } from "./repair.ts";
 import { runPrivilegedMitmStep } from "./privilegedMitmStep.ts";
-import { removeStopDnsEntries } from "./stopDnsTeardown.ts";
+import { removeDnsEntriesAfterFailedStart, removeStopDnsEntries } from "./stopDnsTeardown.ts";
 
 export { buildRepairPlan, collectManagedHosts, type RepairPlan };
 
@@ -229,8 +234,12 @@ const urlPath =
     ? decodeURIComponent(MITM_SERVER_URL.pathname.slice(1))
     : decodeURIComponent(MITM_SERVER_URL.pathname);
 
-const cwdPath = path.join(process.cwd(), "src", "mitm", "server.cjs");
-const MITM_SERVER_PATH = fs.existsSync(cwdPath) ? cwdPath : urlPath;
+// Lazy-resolve to avoid module-level fs.existsSync + process.cwd() at module scope,
+// which causes Turbopack's NFT tracer to follow the path into the entire src/ tree.
+function resolveMitmServerPath(): string {
+  const cwdPath = path.join(/* turbopackIgnore: true */ process.cwd(), "src", "mitm", "server.cjs");
+  return fs.existsSync(cwdPath) ? cwdPath : urlPath;
+}
 
 // Check if a PID is alive
 function isProcessAlive(pid: number): boolean {
@@ -395,23 +404,28 @@ export async function getMitmStatus(agentId?: string): Promise<{
   }
 
   // Check DNS configuration. When an agentId is provided, check THAT agent's
-  // own hosts (#8466) instead of always checking the Antigravity host set —
-  // callers that don't pass agentId keep the legacy Antigravity-only check.
+  // own hosts (#8466) instead of always checking the Antigravity host set.
+  // Fix #8656: no-agentId path now uses checkDNSEntry() which is Windows-aware
+  // (reads HOSTS_FILE = C:\Windows\System32\drivers\etc\hosts on Windows).
   let dnsConfigured = false;
   try {
     if (agentId) {
       dnsConfigured = checkDNSEntryForAgent(agentId);
     } else {
-      const hostsContent = fs.readFileSync("/etc/hosts", "utf-8");
-      dnsConfigured = /\bdaily-cloudcode-pa\.googleapis\.com\b/.test(hostsContent);
+      // Use Windows-aware checkDNSEntry() instead of hardcoded /etc/hosts
+      dnsConfigured = checkDNSEntry();
     }
   } catch {
     // Ignore
   }
 
-  // Check cert
+  // Check cert. #14070: resolve the file the active migration decision
+  // actually installs (ca.crt under the root-CA model), not always the
+  // legacy server.crt — otherwise a root-CA install with no leaf ever
+  // generated would wrongly report certExists:false.
   const certDir = path.join(resolveMitmDataDir(), "mitm");
-  const certExists = fs.existsSync(path.join(certDir, "server.crt"));
+  const rootCaEnabledForStatus = process.env.MITM_ROOT_CA_ENABLED === "true";
+  const certExists = fs.existsSync(resolveActiveCertPath(certDir, rootCaEnabledForStatus).certPath);
 
   return {
     running,
@@ -506,7 +520,7 @@ async function startMitmInternal(
   //    `tproxy/dynamicCert.ts`).
   const certDir = resolveMitmCertDir();
   const rootCaEnabled = process.env.MITM_ROOT_CA_ENABLED === "true";
-  const migrationDecision = decideCertMigration(certDir, rootCaEnabled);
+  const { mode: migrationDecision } = resolveActiveCertPath(certDir, rootCaEnabled);
   let certPath: string;
   if (migrationDecision === "use-legacy-leaf") {
     certPath = path.join(resolveMitmDataDir(), "mitm", "server.crt");
@@ -601,7 +615,7 @@ async function startMitmInternal(
     }
   }
 
-  serverProcess = spawn(process.execPath, [MITM_SERVER_PATH], {
+  serverProcess = spawn(process.execPath, [resolveMitmServerPath()], {
     windowsHide: true,
     env: {
       ...process.env,
@@ -691,6 +705,20 @@ async function startMitmInternal(
   });
 
   if (!started) {
+    // Step 3 above already wrote the /etc/hosts entries. Leaving them behind
+    // points every AgentBridge target hostname at 127.0.0.1:<port>, where the
+    // service that actually owns the port answers with a TLS alert — so the
+    // hostnames fail machine-wide with the bridge down and no way to recover
+    // from the UI. Revert them before surfacing the startup error.
+    await runPrivilegedMitmStep(
+      sudoPassword,
+      "Skipping DNS rollback after a failed start — no sudo password available",
+      () =>
+        removeDnsEntriesAfterFailedStart(
+          { removeDNSEntry, removeDNSEntries, collectManagedHosts },
+          sudoPassword
+        )
+    );
     throw new Error(interpretMitmStartupError(stderrBuffer, port));
   }
 

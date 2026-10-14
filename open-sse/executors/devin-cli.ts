@@ -156,6 +156,7 @@ export class DevinCliExecutor extends BaseExecutor {
         const child = spawn(devinBin, ["acp", "--agent-type", "summarizer"], {
           env,
           stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
           // On Windows, devin.exe may need shell resolution
           shell: process.platform === "win32",
         });
@@ -169,11 +170,7 @@ export class DevinCliExecutor extends BaseExecutor {
             err.message.includes("ENOENT") || err.message.includes("not found")
               ? `Devin CLI not found: ${devinBin}. Install via https://cli.devin.ai or set CLI_DEVIN_BIN env var.`
               : `Devin CLI spawn error: ${err.message}`;
-          emit(
-            `data: ${JSON.stringify({ error: { message: msg, type: "devin_cli_error", code: "spawn_failed" } })}\n\n`
-          );
-          emit("data: [DONE]\n\n");
-          controller.close();
+          finish(msg);
         });
 
         if (signal) {

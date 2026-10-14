@@ -81,7 +81,9 @@ export function createBunSqliteAdapter(db: BunSqliteDatabaseLike, filePath: stri
           return normalizeRunResult(statement.run(...normalizeParams(params)));
         },
         get(...params: unknown[]): unknown {
-          return statement.get(...normalizeParams(params));
+          // bun:sqlite returns null when no row matches; better-sqlite3, node:sqlite and
+          // sql.js return undefined, which is the contract the call sites are written to.
+          return statement.get(...normalizeParams(params)) ?? undefined;
         },
         all(...params: unknown[]): unknown[] {
           return statement.all(...normalizeParams(params));
@@ -129,7 +131,7 @@ export function createBunSqliteAdapter(db: BunSqliteDatabaseLike, filePath: stri
       try {
         db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       } catch {}
-      fs.copyFileSync(filePath, destination);
+      await fs.promises.copyFile(filePath, destination);
     },
 
     checkpoint(mode = "TRUNCATE"): void {

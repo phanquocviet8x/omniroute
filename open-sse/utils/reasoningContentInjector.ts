@@ -29,22 +29,24 @@ const THINKING_MODEL_PATTERNS: RegExp[] = [
   /\bminimax\b/i,
   /\bmimo\b/i, // xiaomi-tokenplan mimo family (e.g. xiaomi-tokenplan/mimo-v2.5-pro)
 ];
-
-const AUTHENTIC_REASONING_MODEL_PATTERN = /(?:^|\/)kimi-k(?:3|2\.7-code)(?:$|-)/i;
+const K3_AUTHENTIC_REASONING_PATTERN = /(?:^|\/)(?:kimi-)?k3(?:$|-)/i;
+const NATIVE_K27_AUTHENTIC_REASONING_PATTERN = /(?:^|\/)kimi-k2\.7-code(?:$|-)/i;
 
 /**
- * Native Moonshot K3/K2.7 replay must use the original reasoning content.
- * A fabricated placeholder changes preserved-thinking history and is not a
- * valid substitute when the client and reasoning cache both lack the field.
+ * K3 requires authentic reasoning regardless of which provider serves it.
+ * Native Moonshot K2.7 retains the same preserved-thinking contract. Empty
+ * protocol markers remain valid only after client content and replay miss.
  */
 export function requiresAuthenticReasoningContent(provider: unknown, model: unknown): boolean {
+  const normalizedModel = String(model ?? "").trim();
+  if (K3_AUTHENTIC_REASONING_PATTERN.test(normalizedModel)) return true;
+
   const normalizedProvider = String(provider ?? "")
     .trim()
     .toLowerCase();
-  const normalizedModel = String(model ?? "").trim();
   return (
     (normalizedProvider === "moonshot" || normalizedProvider === "kimi") &&
-    AUTHENTIC_REASONING_MODEL_PATTERN.test(normalizedModel)
+    NATIVE_K27_AUTHENTIC_REASONING_PATTERN.test(normalizedModel)
   );
 }
 
@@ -53,16 +55,20 @@ export function isThinkingMessageModel(model: string | undefined | null): boolea
   return THINKING_MODEL_PATTERNS.some((re) => re.test(model));
 }
 
+/**
+ * `providerRequiresEcho` is resolved by the caller (Moonshot/Kimi legacy check,
+ * or a registry entry's `requiresReasoningContentEcho` capability flag — see
+ * `open-sse/config/providers/shared.ts`) so the provider allowlist lives in one
+ * place instead of being duplicated here. See issue #13599.
+ */
 export function shouldInjectReasoningContentPlaceholder(
+  providerRequiresEcho: boolean,
   provider: unknown,
   model: string | undefined | null
 ): boolean {
-  const normalizedProvider = String(provider ?? "")
-    .trim()
-    .toLowerCase();
   return (
-    (normalizedProvider === "moonshot" || normalizedProvider === "kimi") &&
-    !requiresAuthenticReasoningContent(normalizedProvider, model) &&
+    providerRequiresEcho &&
+    !requiresAuthenticReasoningContent(provider, model) &&
     isThinkingMessageModel(model)
   );
 }
