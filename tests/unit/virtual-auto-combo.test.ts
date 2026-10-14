@@ -12,6 +12,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
+const providerRegistry = await import("../../open-sse/config/providerRegistry.ts");
 const virtualFactory = await import("../../open-sse/services/autoCombo/virtualFactory.ts");
 
 type VirtualComboResult = Awaited<ReturnType<typeof virtualFactory.createVirtualAutoCombo>>;
@@ -363,4 +364,58 @@ test("createVirtualAutoCombo excludes trigger-bypassed Microsoft Designer connec
     true,
     "a merely similar provider ID must remain eligible"
   );
+});
+
+test("createVirtualAutoCombo with codex-only policy exposes every Codex model across every eligible account", async () => {
+  const tokenExpiresAt = new Date(Date.now() + 60_000).toISOString();
+  const codexA = await providersDb.createProviderConnection({
+    provider: "codex",
+    authType: "oauth",
+    name: "Codex A",
+    accessToken: "fake-codex-access-token-a",
+    tokenExpiresAt,
+  });
+  const codexB = await providersDb.createProviderConnection({
+    provider: "codex",
+    authType: "oauth",
+    name: "Codex B",
+    accessToken: "fake-codex-access-token-b",
+    tokenExpiresAt,
+  });
+  await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: "OpenAI",
+    apiKey: "test-openai",
+    defaultModel: "gpt-4o-mini",
+  });
+
+  const combo: VirtualComboResult = await virtualFactory.createVirtualAutoCombo("coding", {
+    policy: "codex-only",
+  });
+
+  assert.ok(combo.models.length >= 1);
+  assert.deepEqual(new Set(combo.models.map((model) => model.providerId)), new Set(["codex"]));
+  assert.deepEqual(combo.autoConfig.candidatePool, ["codex"]);
+  assert.equal(
+    (combo.autoConfig as typeof combo.autoConfig & { routingPolicy?: string }).routingPolicy,
+    "codex-only"
+  );
+
+  assert.ok(codexA && codexB, "expected both Codex OAuth accounts to be created");
+  const codexRegistry = providerRegistry.REGISTRY.codex.models.map((model) => `codex/${model.id}`);
+  assert.deepEqual(
+    new Set(combo.models.map((model) => model.model)),
+    new Set(codexRegistry),
+    "auto/codex must expose every visible model from the Codex registry"
+  );
+
+  for (const model of combo.models) {
+    assert.equal(model.connectionId, null, `${model.model} must remain a logical model candidate`);
+    assert.deepEqual(
+      new Set(model.allowedConnectionIds),
+      new Set([codexA.id, codexB.id]),
+      `${model.model} must keep every eligible Codex account for smart account rotation`
+    );
+  }
 });

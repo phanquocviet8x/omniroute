@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 const {
   classifyProviderError,
+  modelUnavailableCooldownMs,
   isResourceNotFoundResponse,
   isCloudflareFingerprintRejection,
   isCloudflareChallengeInterstitial,
@@ -160,6 +161,15 @@ test("classifyProviderError: 404 => MODEL_NOT_FOUND", () => {
 test("classifyProviderError: 404 with provider => MODEL_NOT_FOUND", () => {
   const result = classifyProviderError(404, { error: { message: "Not Found" } }, "v0-vercel");
   assert.equal(result, PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND);
+});
+
+test("Codex ChatGPT unsupported-model 400 is a per-account model mismatch", () => {
+  const body = {
+    detail: "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+  };
+  const result = classifyProviderError(400, body, "codex");
+  assert.equal(result, PROVIDER_ERROR_TYPES.MODEL_NOT_FOUND);
+  assert.equal(modelUnavailableCooldownMs(400, "codex", body), 24 * 60 * 60 * 1000);
 });
 
 test("classifyProviderError: Files API 404 is request-scoped, not MODEL_NOT_FOUND", () => {

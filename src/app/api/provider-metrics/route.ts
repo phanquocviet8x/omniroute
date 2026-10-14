@@ -35,7 +35,7 @@ function toProviderMetric(row: ProviderMetricRow): ProviderMetric {
     lastErrorAt: typeof row.lastErrorAt === "string" ? row.lastErrorAt : null,
     lastStatus: row.lastStatus == null ? null : toNumber(row.lastStatus),
     lastErrorStatus: row.lastErrorStatus == null ? null : toNumber(row.lastErrorStatus),
-  lastModel: typeof row.lastModel === "string" ? row.lastModel : null,
+    lastModel: typeof row.lastModel === "string" ? row.lastModel : null,
   };
 }
 

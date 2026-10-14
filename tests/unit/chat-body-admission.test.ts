@@ -342,7 +342,7 @@ test("an existing byte-heavy lease is reused for structure-heavy admission", asy
 });
 
 test("heavyweight admission is atomic and returns retryable 503 at capacity", async () => {
-  const controller = new ChatAdmissionController(1);
+  const controller = new ChatAdmissionController(2);
   const body = JSON.stringify({ messages: [{ role: "user", content: "x".repeat(40) }] });
   const options = {
     controller,
@@ -358,15 +358,27 @@ test("heavyweight admission is atomic and returns retryable 503 at capacity", as
   assert.equal(controller.activeHeavy, 1);
 
   const second = await admitChatRequest(chatRequest(body), options);
-  assert.equal(second.admit, false);
-  if (second.admit) return;
-  assert.equal(second.response.status, 503);
-  assert.equal(second.response.headers.get("Retry-After"), "2");
-  assert.equal((await second.response.json()).error.code, "chat_admission_busy");
+  assert.equal(second.admit, true);
+  if (!second.admit) return;
+  assert.equal(controller.activeHeavy, 2);
+
+  const third = await admitChatRequest(chatRequest(body), options);
+  assert.equal(third.admit, false);
+  if (third.admit) return;
+  assert.equal(third.response.status, 503);
+  assert.equal(third.response.headers.get("Retry-After"), "2");
+  assert.equal((await third.response.json()).error.code, "chat_admission_busy");
 
   first.lease?.release();
   first.lease?.release();
+  second.lease?.release();
   assert.equal(controller.activeHeavy, 0, "release must be idempotent");
+});
+
+test("default heavyweight capacity allows two simultaneous long-context chats", async () => {
+  const source =
+    await import("../../src/shared/middleware/chatBodyAdmission.ts?default-capacity-test");
+  assert.equal(source.CHAT_MAX_HEAVY_IN_FLIGHT, 2);
 });
 
 test("small unknown-length bodies do not consume heavyweight capacity", async () => {

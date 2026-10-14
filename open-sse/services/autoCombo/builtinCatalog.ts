@@ -50,6 +50,10 @@ export const AUTO_TEMPLATE_VARIANTS: Record<string, AutoVariant | undefined> = {
   "auto/bestfree": "cheap",
   "auto/bestcodex": "coding",
   "auto/codex": "coding",
+  // Chaos mode — parallel dispatch to top-N stable models
+  "auto/best-chaos": "chaos",
+  "auto/chaos": "chaos",
+};
 
 /**
  * SulaShop routing-policy auto ids (custom): each materializes with a `policy`
@@ -60,10 +64,6 @@ export const SULASHOP_ROUTING_POLICY_IDS: Record<string, string> = {
   "auto/bestfree": "free-first-paid-fallback",
   "auto/bestcodex": "codex-paid-free",
   "auto/codex": "codex-only",
-};
-  // Chaos mode — parallel dispatch to top-N stable models
-  "auto/best-chaos": "chaos",
-  "auto/chaos": "chaos",
 };
 
 /**

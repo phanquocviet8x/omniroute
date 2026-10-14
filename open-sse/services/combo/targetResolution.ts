@@ -882,6 +882,25 @@ export async function resolveComboTargetPipeline(
     autoUsedExplicitRouter
   );
 
+  // SulaShop: after ALL eligibility/continuity stages, re-promote the strict-policy
+  // pinned target (set when autoUsedExplicitRouter) — but only if it survived every
+  // filter. Never reintroduce an incompatible or context-ineligible target.
+  if (autoUsedExplicitRouter && orderedTargets.length > 0) {
+    const pinned = ordering.orderedTargets[0];
+    const survivingPinned = orderedTargets.find(
+      (target) =>
+        target === pinned ||
+        target.executionKey === pinned.executionKey ||
+        target.executionKey.startsWith(`${pinned.executionKey}@`)
+    );
+    if (survivingPinned && orderedTargets[0] !== survivingPinned) {
+      orderedTargets = [
+        survivingPinned,
+        ...orderedTargets.filter((target) => target !== survivingPinned),
+      ];
+    }
+  }
+
   quotaShareRelease = transferInflightReservation(
     traits.inflightReservation,
     quotaShareRelease,

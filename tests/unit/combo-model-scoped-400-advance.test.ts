@@ -26,7 +26,8 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "combo-model-400-test-secret";
 
 const { handleComboChat, isModelScoped400 } = await import("../../open-sse/services/combo.ts");
-const { clearAllModelLockouts } = await import("../../open-sse/services/accountFallback.ts");
+const { clearAllModelLockouts, isModelLocked } =
+  await import("../../open-sse/services/accountFallback.ts");
 
 // Reused "github/claude-fable-5" across sub-tests below now persists a
 // cross-request model lockout on a 400 "model not supported" (matches
@@ -118,6 +119,38 @@ test("combo advances when first target wraps model rejection in invalid_request_
 
 test("combo advances when first target returns Bad Request + model not supported", async () => {
   await assertAdvancesOn("Bad Request: The model is not supported", "Bad Request wrapper");
+});
+
+test("model-scoped 400 locks only the rejected account/model pair", async () => {
+  const response = await handleComboChat({
+    body: { model: "test", messages: [{ role: "user", content: "hi" }] },
+    combo: {
+      name: "codex-account-model-compatibility",
+      strategy: "priority",
+      models: [
+        { model: "codex/gpt-5.6-sol", connectionId: "codex-account-a" },
+        { model: "codex/gpt-5.5", connectionId: "codex-account-b" },
+      ],
+    },
+    handleSingleModel: async (_body: unknown, modelStr: string) =>
+      modelStr === "codex/gpt-5.6-sol"
+        ? Response.json(
+            {
+              detail:
+                "The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+            },
+            { status: 400 }
+          )
+        : okResponse(modelStr),
+    log,
+    settings: {},
+    allCombos: [],
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(isModelLocked("codex", "codex-account-a", "gpt-5.6-sol"), true);
+  assert.equal(isModelLocked("codex", "codex-account-a", "gpt-5.5"), false);
+  assert.equal(isModelLocked("codex", "codex-account-b", "gpt-5.6-sol"), false);
 });
 
 test("combo advances when first target rejects model for Responses API", async () => {

@@ -139,7 +139,6 @@ import { decideHidePaid } from "./catalogPaidFilter";
 import { isModelExposureAllowed } from "@/shared/utils/modelExposureList";
 import { isCodexDiscoveryModelExcluded } from "@/shared/services/codexDiscoveryPolicy";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
-import { appendProviderScopedAutoModels } from "./providerScopedAutoCatalog";
 
 // Public API of this module is preserved after the catalog helper extraction:
 // `isVisionModelId` (vision-detection-consistency.test.ts) and

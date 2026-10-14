@@ -9,6 +9,7 @@ import {
   checkFallbackError,
   classifyLockoutReason,
   decayModelFailureCount,
+  lockModel,
   hasPerModelQuota,
   isModelLocked,
   lockModelIfPerModelQuota,
@@ -25,6 +26,7 @@ import {
 } from "../../utils/error.ts";
 import { recordComboFailure, clearComboFailureTracking } from "./failureTracker.ts";
 import { recordComboRequest, getComboMetrics } from "../comboMetrics.ts";
+import { resolveProviderId } from "../../../src/shared/constants/providers.ts";
 import {
   expandComboSystemPromptIfPresent,
   resolveTargetFingerprint,
@@ -995,13 +997,46 @@ export async function executeTargetAttempt(opts: {
     // upstream 400s on the same GitHub models, all day). isModelLocked()
     // is checked before dispatch (see the pre-check above this loop), so
     // this lockout is honored on the next request.
-    if (result.status === 400 && isModelScoped400(errorText) && provider && rawModel) {
+    // SulaShop: upstream's per-model-quota lock below uses a scope-level key for
+    // Codex (whole "codex" quota scope), which would also lock sibling models on
+    // the same account. The SulaShop exact-model lock after it handles Codex
+    // instead, keeping sibling models routable — so skip upstream's lock for Codex.
+    if (
+      result.status === 400 &&
+      isModelScoped400(errorText) &&
+      provider &&
+      rawModel &&
+      resolveProviderId(provider) !== "codex"
+    ) {
       lockModelIfPerModelQuota(
         provider,
         targetWithConnection.connectionId || "",
         rawModel,
         "model_capacity",
         60 * 60 * 1000 // 1h
+      );
+    }
+
+    // SulaShop: a model-scoped 400 means this account cannot serve this model, not
+    // that the whole account is unhealthy. Lock that exact account/model pair for
+    // EVERY provider (Codex included) for 24h so later combo requests skip it while
+    // the account stays eligible for its other models. The lockout map keeps the
+    // last write, so the effective TTL stays 24h ("model_access_denied", mirrored
+    // as not_found by checkFallbackError → combo advances instead of cooling the
+    // account).
+    if (
+      result.status === 400 &&
+      isModelScoped400(errorText) &&
+      provider &&
+      rawModel &&
+      targetWithConnection.connectionId
+    ) {
+      lockModel(
+        provider,
+        targetWithConnection.connectionId,
+        rawModel,
+        "model_access_denied",
+        24 * 60 * 60 * 1000
       );
     }
 

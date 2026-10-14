@@ -328,19 +328,18 @@ export async function resolveAutoStrategyOrder(
         )
       : null;
 
-  const { sourceCandidates, candidates } =
-    await evaluateAutoCandidates({
-      targets: eligibleTargets,
-      comboName: combo.name,
-      body,
-      taskType,
-      weights,
-      sessionId: relayOptions?.sessionId,
-      resetWindowConfig,
-      resilienceSettings: autoCandidateResilienceSettings,
-      manifestHint: autoManifestHint,
-      buildAutoCandidates,
-    });
+  const { sourceCandidates, candidates } = await evaluateAutoCandidates({
+    targets: eligibleTargets,
+    comboName: combo.name,
+    body,
+    taskType,
+    weights,
+    sessionId: relayOptions?.sessionId,
+    resetWindowConfig,
+    resilienceSettings: autoCandidateResilienceSettings,
+    manifestHint: autoManifestHint,
+    buildAutoCandidates,
+  });
   for (let index = 0; index < sourceCandidates.length; index += 1) {
     sourceCandidates[index].cacheAffinity = candidates[index]?.cacheAffinity;
   }
@@ -470,18 +469,6 @@ export async function resolveAutoStrategyOrder(
       selectedConnectionId = selection.connectionId ?? null;
       selectionReason = `score=${selection.score.toFixed(3)}${selection.isExploration ? " (exploration)" : ""}`;
     }
-
-    // Complexity-aware routing (2026, opt-in): classify the request's
-    // difficulty and feed a tier hint into scoring so tierAffinity /
-    // specificityMatch favor candidates whose tier matches the request.
-    const autoManifestHint: RoutingHint | null =
-      config.complexityAwareRouting === true
-        ? buildComplexityRoutingHint(
-            eligibleTargets.filter((t) => t.kind === "model"),
-            body,
-            log
-          )
-        : null;
 
     const isFree = (candidate: AutoProviderCandidate): boolean => {
       try {
