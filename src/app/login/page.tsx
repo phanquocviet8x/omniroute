@@ -29,7 +29,7 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const raf = requestAnimationFrame(() => setMounted(true));
+    const _raf = requestAnimationFrame(() => setMounted(true));
     async function checkAuth() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -83,6 +83,15 @@ export default function LoginPage() {
       });
 
       if (res.ok) {
+        const data = await res.json();
+        // Dashboard 2FA: password alone is not a session. Hold the pending
+        // token and switch the card to the TOTP code step.
+        if (data.requires2FA && data.token) {
+          setTwoFactorToken(data.token);
+          setTotpCode("");
+          setError("");
+          return;
+        }
         sessionStorage.setItem("omniroute_login_time", String(Date.now()));
         window.location.href = "/dashboard";
       } else {
@@ -90,14 +99,6 @@ export default function LoginPage() {
         // (#521) If no password is set, redirect to onboarding instead of showing an error
         if (data.needsSetup) {
           window.location.href = "/dashboard/onboarding";
-          return;
-        }
-        // Dashboard 2FA: password alone is not a session. Hold the pending
-        // token and switch the card to the TOTP code step.
-        if (data.requires2FA && data.token) {
-          setTwoFactorToken(data.token);
-          setTotpCode("");
-          setError("");
           return;
         }
         setError(data.error || t("invalidPassword"));
@@ -314,7 +315,11 @@ export default function LoginPage() {
               </div>
             ) : (
               <>
-                <form onSubmit={handleLogin} className="space-y-5 w-full" hidden={Boolean(twoFactorToken)}>
+                <form
+                  onSubmit={handleLogin}
+                  className="space-y-5 w-full"
+                  hidden={Boolean(twoFactorToken)}
+                >
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-text-main">{t("password")}</label>
                     <Input
