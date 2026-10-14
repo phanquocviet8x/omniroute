@@ -71,8 +71,7 @@ import {
 import { computeAdvertisedLimits } from "./advertisedLimits";
 
 export { computeAdvertisedLimits };
-import { resolveProviderScopeIds, type ProviderScopeNode } from "./providerScope";
-import { getSyncedAvailableModelsByConnection } from "@/lib/db/models";
+import { resolveProviderScopeIds } from "./providerScope";
 
 /** #4235 Phase B: optional category/tier overlay for `auto/<category>:<tier>` combos.
  * #6453: optional `family` overlay for `auto/<family>` combos (e.g. `auto/glm`) —
@@ -1114,7 +1113,9 @@ export async function createVirtualAutoComboFromPrepared(
     // per-connection synced model store. Restore candidates from the pool,
     // keeping only models the connection's synced list actually carries.
     if (scopedPool.length === 0) {
-      const syncedByConnection = (prepared as unknown as { syncedModelsByConnection?: Record<string, string[]> }).syncedModelsByConnection ?? {};
+      const syncedByConnection =
+        (prepared as unknown as { syncedModelsByConnection?: Record<string, string[]> })
+          .syncedModelsByConnection ?? {};
       for (const candidate of candidatePool) {
         if (!providerScopeIds.has(candidate.provider)) continue;
         const allowed = new Set(syncedByConnection[candidate.provider] ?? []);
