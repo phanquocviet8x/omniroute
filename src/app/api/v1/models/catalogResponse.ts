@@ -40,6 +40,7 @@ import {
 } from "@/shared/utils/featureFlags";
 import { extractApiKey } from "@/sse/services/auth";
 import { maybeOmitCatalogModelName } from "./catalogHelpers";
+import { appendProviderScopedAutoModels } from "./providerScopedAutoCatalog";
 import { applyCatalogPage, catalogJsonResponse, parseCatalogPage } from "./catalogPagination";
 import { isCodexModelCatalogClient } from "./catalogRequest";
 
@@ -323,7 +324,10 @@ export async function finalizeCatalogResponse(
     }
   }
   await yieldTurn();
-  const enrichedModels = disambiguateCatalogModelNames(enriched);
+  const enrichedModels = appendProviderScopedAutoModels(
+    disambiguateCatalogModelNames(enriched),
+    Date.now()
+  );
   await yieldTurn();
   const orderedModels = sortCatalogModelsProviderGrouped(enrichedModels);
   await yieldTurn();

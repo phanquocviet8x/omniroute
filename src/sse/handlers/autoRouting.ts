@@ -11,7 +11,16 @@ import {
   type AutoCategory,
   type AutoTier,
 } from "@omniroute/open-sse/services/autoCombo/suffixComposition.ts";
-import { getCachedSettings } from "@/lib/localDb";
+import {
+  isValidModelFamily,
+  type ModelFamily,
+} from "@omniroute/open-sse/services/autoCombo/modelFamily.ts";
+import { getCachedSettings } from "@/lib/db/readCache";
+import {
+  createInvocationId,
+  startAutoEvaluationTrace,
+  startComboTrace,
+} from "@omniroute/open-sse/services/combo/decisionTrace.ts";
 import * as log from "../utils/logger";
 
 export type AutoRoutingState = {
@@ -52,6 +61,10 @@ function classifyAutoModel(
   const recognizedBuiltInAuto =
     model === "auto" || Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, model);
   if (Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, model)) {
+    // auto/best-free must carry spec.tier="free" so virtualFactory applies the
+    // free-tier candidate filter (excludes paid backends). Mirrors the
+    // hardcoded spec in builtinCatalog.ts:createBuiltinAutoCombo. Without this,
+    // chat.ts routes auto/best-free as plain auto/cheap (no tier filter).
     const policy =
       model === "auto/bestfree"
         ? "free-first-paid-fallback"
@@ -60,11 +73,13 @@ function classifyAutoModel(
           : model === "auto/codex"
             ? "codex-only"
             : undefined;
-    return {
-      variant: AUTO_TEMPLATE_VARIANTS[model],
-      ...(policy ? { spec: { policy } } : {}),
-      recognizedBuiltInAuto: true,
-    };
+    const spec =
+      policy !== undefined
+        ? { policy }
+        : model === "auto/best-free"
+          ? { tier: "free" as const }
+          : undefined;
+    return { variant: AUTO_TEMPLATE_VARIANTS[model], spec, recognizedBuiltInAuto: true };
   }
   if (!model.startsWith("auto/")) return { recognizedBuiltInAuto };
 
@@ -73,12 +88,19 @@ function classifyAutoModel(
     return { recognizedBuiltInAuto: true };
   }
   const parsedSuffix = parseAutoSuffix(suffix);
-  return parsedSuffix.valid
-    ? {
-        recognizedBuiltInAuto: true,
-        spec: { category: parsedSuffix.category, tier: parsedSuffix.tier },
-      }
-    : { recognizedBuiltInAuto };
+  if (parsedSuffix.valid) {
+    return {
+      recognizedBuiltInAuto: true,
+      spec: { category: parsedSuffix.category, tier: parsedSuffix.tier },
+    };
+  }
+  if (isValidModelFamily(suffix)) {
+    return {
+      recognizedBuiltInAuto: true,
+      spec: { family: suffix as ModelFamily },
+    };
+  }
+  return { recognizedBuiltInAuto };
 }
 
 async function applyAutoPrefix(
@@ -90,14 +112,13 @@ async function applyAutoPrefix(
     const { parseAutoPrefix } =
       await import("@omniroute/open-sse/services/autoCombo/autoPrefix.ts");
     const parsed = parseAutoPrefix(model);
-    if (!parsed.valid) {
+    const recognizedBuiltIn = Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, model);
+    if (!parsed.valid && !recognizedBuiltIn) {
       if (!state.spec) log.warn("AUTO", `Invalid auto prefix format: ${model}`);
       return state;
     }
 
-    const variant = Object.prototype.hasOwnProperty.call(AUTO_TEMPLATE_VARIANTS, model)
-      ? state.variant
-      : parsed.variant;
+    const variant = recognizedBuiltIn ? state.variant : parsed.variant;
     const defaultVariant =
       model === "auto" && variant === undefined
         ? (settings.autoRoutingDefaultVariant as AutoVariant | undefined)
@@ -158,9 +179,19 @@ export async function createVirtualAutoCombo(
     // #7819 (Level 2): scope candidate exclusions to this API key + the
     // requested auto channel (e.g. "auto/best-coding"). Omitted for any
     // caller that doesn't pass apiKeyId — routing stays unfiltered.
-    const virtualCombo = await createVirtual(state.variant, state.spec, apiKeyId, state.model);
+    const invocationId = createInvocationId();
+    startComboTrace(invocationId, { strategy: "auto", comboName: state.model });
+    startAutoEvaluationTrace(invocationId);
+    const virtualCombo = await createVirtual(
+      state.variant,
+      state.spec,
+      apiKeyId,
+      state.model,
+      invocationId
+    );
     virtualCombo.name = state.model;
     virtualCombo.id = state.model;
+    virtualCombo.traceInvocationId = invocationId;
     log.info(
       "AUTO",
       `Virtual auto-combo created: ${virtualCombo.name} (${virtualCombo.candidatePool?.length || 0} candidates)`

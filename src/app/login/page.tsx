@@ -3,7 +3,11 @@
 import { useTranslations } from "next-intl";
 
 import { useState, useEffect } from "react";
-import { Button, Input } from "@/shared/components";
+// Direct module imports, not the "@/shared/components" barrel: the barrel
+// re-exports Sidebar/Header/composites (and transitively the whole dashboard
+// shell) which would otherwise ship in the /login page chunks.
+import Button from "@/shared/components/Button";
+import Input from "@/shared/components/Input";
 import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
@@ -15,9 +19,10 @@ export default function LoginPage() {
   // While set, the login card shows the TOTP code step instead of the password form.
   const [twoFactorToken, setTwoFactorToken] = useState(null);
   const [totpCode, setTotpCode] = useState("");
-  const [hasPassword, setHasPassword] = useState(null);
-  const [setupComplete, setSetupComplete] = useState(null);
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
+  const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [oidcEnabled, setOidcEnabled] = useState<boolean | null>(null);
+  const [oidcDisablePasswordLogin, setOidcDisablePasswordLogin] = useState<boolean | null>(null);
   const [mounted, setMounted] = useState(false);
   const [nodeVersion, setNodeVersion] = useState(null);
   const [nodeCompatible, setNodeCompatible] = useState(true);
@@ -40,24 +45,26 @@ export default function LoginPage() {
           const data = await res.json();
           if (data.nodeVersion) setNodeVersion(data.nodeVersion);
           if (data.nodeCompatible === false) setNodeCompatible(false);
-          if (data.requireLogin === false) {
-            router.push("/dashboard");
-            router.refresh();
+          if (data.authenticated === true || data.requireLogin === false) {
+            window.location.href = "/dashboard";
             return;
           }
           setHasPassword(!!data.hasPassword);
           setSetupComplete(!!data.setupComplete);
           setOidcEnabled(!!data.oidcEnabled);
+          setOidcDisablePasswordLogin(!!data.oidcDisablePasswordLogin);
         } else {
           setHasPassword(true);
           setSetupComplete(true);
           setOidcEnabled(false);
+          setOidcDisablePasswordLogin(false);
         }
       } catch (err) {
         clearTimeout(timeoutId);
         setHasPassword(true);
         setSetupComplete(true);
         setOidcEnabled(false);
+        setOidcDisablePasswordLogin(false);
       }
     }
     checkAuth();
@@ -76,22 +83,21 @@ export default function LoginPage() {
       });
 
       if (res.ok) {
-        const data = await res.json();
-        // Second factor enabled: the server deliberately did NOT mint a
-        // session cookie — show the TOTP step and complete login there.
-        if (data.requires2FA && data.token) {
-          setTwoFactorToken(data.token);
-          setError("");
-          return;
-        }
         sessionStorage.setItem("omniroute_login_time", String(Date.now()));
-        router.push("/dashboard");
-        router.refresh();
+        window.location.href = "/dashboard";
       } else {
         const data = await res.json();
         // (#521) If no password is set, redirect to onboarding instead of showing an error
         if (data.needsSetup) {
-          router.push("/dashboard/onboarding");
+          window.location.href = "/dashboard/onboarding";
+          return;
+        }
+        // Dashboard 2FA: password alone is not a session. Hold the pending
+        // token and switch the card to the TOTP code step.
+        if (data.requires2FA && data.token) {
+          setTwoFactorToken(data.token);
+          setTotpCode("");
+          setError("");
           return;
         }
         setError(data.error || t("invalidPassword"));
@@ -117,8 +123,7 @@ export default function LoginPage() {
 
       if (res.ok) {
         sessionStorage.setItem("omniroute_login_time", String(Date.now()));
-        router.push("/dashboard");
-        router.refresh();
+        window.location.href = "/dashboard";
       } else {
         const data = await res.json();
         const message =
@@ -170,7 +175,12 @@ export default function LoginPage() {
         </div>
       </div>
     ) : null;
-  if (hasPassword === null || setupComplete === null || oidcEnabled === null) {
+  if (
+    hasPassword === null ||
+    setupComplete === null ||
+    oidcEnabled === null ||
+    (oidcEnabled && oidcDisablePasswordLogin === null)
+  ) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6">
         {nodeWarningBanner}
@@ -283,110 +293,134 @@ export default function LoginPage() {
                 </span>
               </div>
               <h1 className="text-2xl font-bold text-text-main tracking-tight">{t("signIn")}</h1>
-              <p className="text-text-muted mt-1.5">{t("enterPassword")}</p>
+              <p className="text-text-muted mt-1.5">
+                {oidcEnabled && oidcDisablePasswordLogin
+                  ? t("continueWithOidc")
+                  : t("enterPassword")}
+              </p>
             </div>
 
-            <form onSubmit={handleLogin} className="space-y-5" hidden={Boolean(twoFactorToken)}>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-text-main">{t("password")}</label>
-                <Input
-                  type="password"
-                  placeholder={t("enterPassword")}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoFocus
-                  className="h-11"
-                />
-                {error && (
-                  <p className="text-sm text-red-500 flex items-center gap-1.5 pt-1">
-                    <span className="material-symbols-outlined text-base">error</span>
-                    {error}
-                  </p>
-                )}
-                <p className="text-xs text-text-muted/60 pt-0.5">{t("defaultPasswordHint")}</p>
-              </div>
-
-              <Button
-                type="submit"
-                variant="primary"
-                className="w-full h-11 text-sm font-medium"
-                loading={loading}
-              >
-                {t("continue")}
-              </Button>
-            </form>
-
-            {twoFactorToken && (
-              <form onSubmit={handleTwoFactorVerify} className="space-y-5">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-text-main">
-                    Two-factor authentication
-                  </label>
-                  <Input
-                    type="text"
-                    placeholder="123456 or ABCDE-FGHJK"
-                    value={totpCode}
-                    onChange={(e) => setTotpCode(e.target.value)}
-                    required
-                    autoFocus
-                    autoComplete="one-time-code"
-                    className="h-11 font-mono tracking-widest"
-                  />
-                  {error && (
-                    <p className="text-sm text-red-500 flex items-center gap-1.5 pt-1">
-                      <span className="material-symbols-outlined text-base">error</span>
-                      {error}
-                    </p>
-                  )}
-                  <p className="text-xs text-text-muted/60 pt-0.5">
-                    Enter the 6-digit code from your authenticator app, or one of your recovery
-                    codes.
-                  </p>
-                </div>
-
+            {oidcEnabled && oidcDisablePasswordLogin ? (
+              <div className="space-y-4">
                 <Button
-                  type="submit"
+                  type="button"
                   variant="primary"
-                  className="w-full h-11 text-sm font-medium"
-                  loading={loading}
-                >
-                  Verify
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTwoFactorToken(null);
-                    setTotpCode("");
-                    setError("");
-                  }}
-                  className="text-sm text-text-muted hover:text-primary transition-colors"
-                >
-                  Back to password
-                </button>
-              </form>
-            )}
-            {oidcEnabled && (
-              <div className="mt-4">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="w-full h-11 text-sm font-medium"
+                  className="w-full h-11 text-sm font-medium flex items-center justify-center gap-2"
                   onClick={() => (window.location.href = "/api/auth/oidc/login")}
                 >
-                  {t("continueWithOidc") || "Continue with OIDC"}
+                  <span className="material-symbols-outlined text-lg">login</span>
+                  {t("continueWithOidc")}
                 </Button>
               </div>
+            ) : (
+              <>
+                <form onSubmit={handleLogin} className="space-y-5 w-full" hidden={Boolean(twoFactorToken)}>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-text-main">{t("password")}</label>
+                    <Input
+                      type="password"
+                      placeholder={t("enterPassword")}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      autoFocus
+                      className="h-11"
+                    />
+                    {error && (
+                      <p className="text-sm text-red-500 flex items-center gap-1.5 pt-1">
+                        <span className="material-symbols-outlined text-base">error</span>
+                        {error}
+                      </p>
+                    )}
+                    <p className="text-xs text-text-muted/60 pt-0.5">{t("defaultPasswordHint")}</p>
+                  </div>
+
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    className="w-full h-11 text-sm font-medium"
+                    loading={loading}
+                  >
+                    {t("continue")}
+                  </Button>
+                </form>
+
+                {twoFactorToken && (
+                  <form onSubmit={handleTwoFactorVerify} className="space-y-5 w-full">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-text-main">
+                        Two-factor authentication
+                      </label>
+                      <Input
+                        type="text"
+                        placeholder="123456 or ABCDE-FGHJK"
+                        value={totpCode}
+                        onChange={(e) => setTotpCode(e.target.value)}
+                        required
+                        autoFocus
+                        autoComplete="one-time-code"
+                        className="h-11 font-mono tracking-widest"
+                      />
+                      {error && (
+                        <p className="text-sm text-red-500 flex items-center gap-1.5 pt-1">
+                          <span className="material-symbols-outlined text-base">error</span>
+                          {error}
+                        </p>
+                      )}
+                      <p className="text-xs text-text-muted/60 pt-0.5">
+                        Enter the 6-digit code from your authenticator app, or one of your recovery
+                        codes.
+                      </p>
+                    </div>
+
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      className="w-full h-11 text-sm font-medium"
+                      loading={loading}
+                    >
+                      Verify
+                    </Button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTwoFactorToken(null);
+                        setTotpCode("");
+                        setError("");
+                      }}
+                      className="text-sm text-text-muted hover:text-primary transition-colors"
+                    >
+                      Back to password
+                    </button>
+                  </form>
+                )}
+
+                {oidcEnabled && (
+                  <div className="mt-4">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="w-full h-11 text-sm font-medium flex items-center justify-center gap-2"
+                      onClick={() => (window.location.href = "/api/auth/oidc/login")}
+                    >
+                      <span className="material-symbols-outlined text-lg">login</span>
+                      {t("continueWithOidc")}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
 
-            <div className="mt-6 pt-6 border-t border-border">
-              <a
-                href="/forgot-password"
-                className="text-sm text-text-muted hover:text-primary transition-colors"
-              >
-                {t("forgotPassword")}
-              </a>
-            </div>
+            {!oidcEnabled && (
+              <div className="mt-6 pt-6 border-t border-border">
+                <a
+                  href="/forgot-password"
+                  className="text-sm text-text-muted hover:text-primary transition-colors"
+                >
+                  {t("forgotPassword")}
+                </a>
+              </div>
+            )}
           </div>
         </div>
 
